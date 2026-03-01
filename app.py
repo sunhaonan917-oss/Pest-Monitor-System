@@ -43,6 +43,7 @@ global_config = {"save_dir": "C:/Screenshots"}
 # CSS 样式
 # ---------------------------
 # ---------------------------
+# ---------------------------
 # CSS 样式
 # ---------------------------
 st.markdown("""
@@ -52,18 +53,19 @@ st.markdown("""
     .app-title p { margin: 6px 0 0 0; color: rgba(0,0,0,0.6); }
     .card { padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.06); background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.04); margin-bottom: 12px; }
 
-    /* 👇 终极暴力破解法：全面覆盖侧边栏单选按钮的底层标签 */
+    /* 👇 修复侧边栏单选按钮垂直不对齐的问题 */
+    label[data-baseweb="radio"] {
+        align-items: center !important; /* 强制红点和文字垂直居中对齐 */
+        margin-bottom: 16px !important; /* 用外边距拉开选项之间的距离，不再挤在一起 */
+    }
+
     section[data-testid="stSidebar"] .stRadio p,
     div[role="radiogroup"] p,
     .stRadio label p {
-        font-size: 20px !important;  /* 这里我直接给你调到 20px，保证肉眼可见的变大 */
-        font-weight: 600 !important; /* 加粗显示 */
-        line-height: 2 !important;   /* 把选项上下的间距也拉开一点，免得字变大后挤在一起 */
-    }
-
-    /* 顺便把上面“选择功能模式：”这个小标题的字号也稍微调大一点点适配 */
-    .stRadio label[data-baseweb="radio"] {
-        margin-bottom: 10px;
+        font-size: 20px !important;  
+        font-weight: 600 !important; 
+        line-height: normal !important; /* 恢复正常行高，防止文字隐形框变形 */
+        margin-top: 2px !important;     /* 微调文字重心，使其与红点绝对水平 */
     }
     </style>
     """, unsafe_allow_html=True)
@@ -474,4 +476,5 @@ elif main_task == "害虫检测计数":
 elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
+
     run_history_mode()
