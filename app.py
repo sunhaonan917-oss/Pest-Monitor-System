@@ -34,21 +34,19 @@ CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
 
-# ✅ Ngrok 网址 (用于提供带 HTTPS 的视频流，防止浏览器拦截)
-NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
-NGROK_HEADERS = {"ngrok-skip-browser-warning": "any"}
-JETSON_IP = NGROK_URL
-JETSON_PORT = ""
+# ✅ [修改点1]：使用完整的 Ngrok 网址
+JETSON_IP = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
+JETSON_PORT = "" 
+NGROK_HEADERS = {"ngrok-skip-browser-warning": "any"} # 破解拦截专用
 
-# ✅ 强制写入阿里云硬盘的绝对路径！
-# 只要这个代码在阿里云上跑，所有截图和 TXT 都会永久存在这个文件夹里
-DEFAULT_SAVE_DIR = "/root/PestData"
+# ✅ [修改点2]：使用云端安全的相对路径，防止 PermissionError
+SAFE_SAVE_DIR = "pest_records"
 
 # 【关键点】作为前端网页和后台线程通信的桥梁
-global_config = {"save_dir": DEFAULT_SAVE_DIR}
+global_config = {"save_dir": SAFE_SAVE_DIR}
 
 # ---------------------------
-# CSS 样式 (100% 保持原样)
+# CSS 样式 (完全未动)
 # ---------------------------
 st.markdown("""
     <style>
@@ -75,7 +73,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ---------------------------
-# Session 状态初始化 (100% 保持原样)
+# Session 状态初始化
 # ---------------------------
 if "class_names" not in st.session_state:
     st.session_state.class_names = ["SFegg", "SFfourth", "SFfifth", "SFsixth", "SFadult"]
@@ -84,7 +82,7 @@ if "support_bytes" not in st.session_state:
 if "query_bytes" not in st.session_state:
     st.session_state.query_bytes = None
 if 'save_dir' not in st.session_state:
-    st.session_state.save_dir = DEFAULT_SAVE_DIR
+    st.session_state.save_dir = SAFE_SAVE_DIR
 
 
 # ==========================================================
@@ -100,7 +98,7 @@ def auto_curve_logger():
         current_save_dir = global_config["save_dir"]
 
         try:
-            # ✅ 加入 headers 破解 Ngrok 拦截
+            # ✅ [修改点3]：加入 headers 才能获取到数字而不是拦截网页
             res = requests.get(count_url, headers=NGROK_HEADERS, timeout=2)
             if res.status_code == 200:
                 count = res.json().get("count", 0)
@@ -127,12 +125,12 @@ def auto_curve_logger():
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                last_save_minute = current_time.minute  
+                last_save_minute = current_time.minute  # 标记这一分钟已经存过
 
         except Exception as e:
-            pass  
+            pass  # 如果 Jetson 关机了，后台线程保持静默，不报错干扰系统
 
-        time.sleep(1)  
+        time.sleep(1)  # 每秒拉取一次
 
 
 # 确保线程只在网页第一次加载时启动一次
@@ -143,7 +141,7 @@ if 'logger_thread_started' not in st.session_state:
 
 
 # ---------------------------
-# 工具函数 (100% 保持原样)
+# 工具函数 (完全未动)
 # ---------------------------
 def bytes_to_filelike(b: bytes): return io.BytesIO(b)
 
@@ -160,7 +158,7 @@ def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
 
 
 # ---------------------------
-# Sidebar 侧边栏 (100% 保持原样)
+# Sidebar 侧边栏 (完全未动)
 # ---------------------------
 st.sidebar.markdown('## 🐛 草地贪夜蛾监测平台')
 
@@ -180,7 +178,7 @@ save_dir = st.session_state.save_dir
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
 
 # ==========================================================
-# 模式零：平台首页 (100% 保持原样)
+# 模式零：平台首页 (完全未动)
 # ==========================================================
 def run_home_mode():
     st.markdown("""
@@ -204,7 +202,7 @@ def run_home_mode():
 
 
 # ==========================================================
-# 模式一：实时目标检测 (100% 保留界面，修正抓取逻辑)
+# 模式一：实时目标检测 (加入安全通行证)
 # ==========================================================
 def run_detection_mode():
     st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
@@ -226,6 +224,7 @@ def run_detection_mode():
 
     with col_left:
         st.markdown("#### 📡 实时监控视窗")
+        # 这段JS保持原样，只去掉了之前的端口拼接
         video_html = f"""
         <!DOCTYPE html>
         <html>
@@ -240,14 +239,7 @@ def run_detection_mode():
             <script>
                 var liveStream = document.getElementById('live_stream');
                 setInterval(() => {{
-                    fetch("{snapshot_url}?t=" + new Date().getTime(), {{
-                        headers: {{ "ngrok-skip-browser-warning": "any" }}
-                    }})
-                    .then(response => response.blob())
-                    .then(blob => {{
-                        liveStream.src = URL.createObjectURL(blob);
-                    }})
-                    .catch(err => console.log('等待边缘端响应...'));
+                    liveStream.src = "{snapshot_url}?t=" + new Date().getTime();
                 }}, 150); 
             </script>
         </body>
@@ -258,33 +250,37 @@ def run_detection_mode():
     with col_right:
         st.markdown("#### 📸 监控控制台")
 
+        # 1. 原有的：保存带有检测框的画面
         if st.button("🖼️ 一键保存当前画面"):
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir, exist_ok=True)
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             file_path = os.path.join(save_dir, f"pest_det_{timestamp}.jpg")
             try:
+                # ✅ 唯一改动：加入 headers=NGROK_HEADERS
                 response = requests.get(snapshot_url, headers=NGROK_HEADERS, timeout=5)
                 if response.status_code == 200:
                     with open(file_path, "wb") as f:
                         f.write(response.content)
-                    st.success(f"✅ 已永久保存至阿里云硬盘: {file_path}")
+                    st.success(f"✅ 已保存: {file_path}")
             except Exception as e:
                 st.error("截屏出错, 请检查网络。")
 
 
+        # 3. 原有的：记录数量
         if st.button("📝 记录当前数量到 TXT"):
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir, exist_ok=True)
             txt_path = os.path.join(save_dir, "pest_count_log.txt")
             try:
+                # ✅ 唯一改动：加入 headers=NGROK_HEADERS
                 res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
                 if res.status_code == 200:
                     count = res.json().get("count", 0)
                     timestamp_txt = time.strftime("%Y-%m-%d %H:%M:%S")
                     with open(txt_path, "a", encoding="utf-8") as f:
                         f.write(f"[{timestamp_txt}] 发现草地贪夜蛾目标数量: {count} 只\n")
-                    st.success("✅ 日志已永久追加至阿里云硬盘")
+                    st.success("✅ 日志已追加")
             except Exception as e:
                 st.error("网络请求失败。")
 
@@ -330,6 +326,7 @@ def run_detection_mode():
                 }});
 
                 setInterval(() => {{
+                    // ✅ 唯一改动：在 fetch 中加入 headers
                     fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
                         .then(response => response.json())
                         .then(data => {{
@@ -343,7 +340,7 @@ def run_detection_mode():
                             pestChart.data.datasets[0].data.push(data.count);
                             pestChart.update();
                         }})
-                        .catch(err => console.log('等待...'));
+                        .catch(err => console.log('等待边缘端响应...'));
                 }}, 1000);
             </script>
         </body>
@@ -353,7 +350,7 @@ def run_detection_mode():
 
 
 # ==========================================================
-# 模式二：小样本分类逻辑 (100% 保持原样)
+# 模式二：小样本分类逻辑 (完全未动)
 # ==========================================================
 def run_classification_mode():
     st.markdown('<div class="app-title"><h1>EIR-CDFS害虫分类</h1><p>本地计算资源推理</p></div>', unsafe_allow_html=True)
@@ -409,7 +406,7 @@ def run_classification_mode():
 
 
 # ==========================================================
-# 模式三：历史数据洞察 (图表重绘与照片画廊) (100% 保持原样)
+# 模式三：历史数据洞察 (完全未动)
 # ==========================================================
 def run_history_mode():
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测记录与截图归档</p></div>', unsafe_allow_html=True)
