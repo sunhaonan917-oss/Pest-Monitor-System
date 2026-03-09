@@ -6,6 +6,7 @@ import json
 import threading
 import requests
 import pandas as pd
+import altair as alt  # ✅ 新增：引入 Altair 用于精确控制图表坐标轴
 # ✅ 引入 timezone 用于计算和强制绑定北京时间
 from datetime import datetime, timedelta, timezone
 
@@ -47,7 +48,6 @@ NGROK_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# 原变量保留不动，但在下方拼接时弃用，避免生成错乱URL
 JETSON_IP = "100.104.20.74"
 JETSON_PORT = "5000"
 
@@ -125,22 +125,18 @@ def auto_curve_logger():
                 if len(buffer_20s) > 20:
                     buffer_20s.pop(0)
 
-            # ✅ 【修复只有一个点的问题】：
-            # 条件1：current_time.second <= 3 (抓住每分钟刚开始的 0~3 秒，防止错过)
-            # 条件2：current_time.minute != last_save_minute (保证这分钟只存一次)
-            # 条件3：len(buffer_20s) >= 10 (要求缓存里至少攒够 10 个数据点，拒绝早产)
-            if current_time.second <= 3 and current_time.minute != last_save_minute and len(buffer_20s) >= 10:
-                os.makedirs(current_save_dir, exist_ok=True)
-                log_file = os.path.join(current_save_dir, "auto_curve_history.json")
+                if current_time.second <= 3 and current_time.minute != last_save_minute and len(buffer_20s) >= 10:
+                    os.makedirs(current_save_dir, exist_ok=True)
+                    log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
-                record = {
-                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "data": buffer_20s.copy()
-                }
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    record = {
+                        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "data": buffer_20s.copy()
+                    }
+                    with open(log_file, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                last_save_minute = current_time.minute  
+                    last_save_minute = current_time.minute  
 
         except Exception as e:
             pass  
@@ -161,7 +157,7 @@ def bytes_to_filelike(b: bytes): return io.BytesIO(b)
 
 def bytes_to_pil(b: bytes): return Image.open(io.BytesIO(b)).convert("RGB")
 
-@st.cache(allow_output_mutation=True)
+@st.cache_resource
 def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
     dev = torch.device(device_str)
     model = build_model(n_way=5, n_support=5, backbone_name=backbone_name)
@@ -269,7 +265,6 @@ def run_detection_mode():
     with col_right:
         st.markdown("#### 📸 监控控制台")
 
-        # 🟢 前端直接下载代码
         download_buttons_html = f"""
         <!DOCTYPE html>
         <html>
@@ -301,7 +296,6 @@ def run_detection_mode():
                         const a = document.createElement('a');
                         a.href = URL.createObjectURL(blob);
                         
-                        // ✅ 强制转换浏览器本地时间为准确的北京时间
                         const beijingStr = new Date().toLocaleString("en-US", {{timeZone: "Asia/Shanghai"}});
                         const now = new Date(beijingStr);
                         const timeStr = now.getFullYear() + 
@@ -325,7 +319,6 @@ def run_detection_mode():
                         }});
                         const data = await res.json();
                         
-                        // ✅ TXT 记录内部强设北京时间
                         const timeStr = new Date().toLocaleString('zh-CN', {{ timeZone: 'Asia/Shanghai', hour12: false }});
                         const text = "[" + timeStr + "] 发现草地贪夜蛾目标数量: " + data.count + " 只\\n";
                         
@@ -333,7 +326,6 @@ def run_detection_mode():
                         const a = document.createElement('a');
                         a.href = URL.createObjectURL(blob);
                         
-                        // ✅ 文件名强设北京时间
                         const beijingStr = new Date().toLocaleString("en-US", {{timeZone: "Asia/Shanghai"}});
                         const now = new Date(beijingStr);
                         const fileTime = now.getFullYear() + 
@@ -479,7 +471,6 @@ def run_classification_mode():
 # 模式三：历史数据洞察 
 # ==========================================================
 def run_history_mode():
-    # 去掉了“与截图归档”的文案，专注历史记录展示
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
 
     log_file = os.path.join(save_dir, "auto_curve_history.json")
@@ -492,18 +483,21 @@ def run_history_mode():
 
         if records:
             st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
-            # 倒序排列，让最新的记录在最上面
             options = [r["timestamp"] for r in reversed(records)]
             selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
 
-            # 重绘图表
             for r in records:
                 if r["timestamp"] == selected_time:
                     df = pd.DataFrame(r["data"])
-                    df.set_index("时间", inplace=True)
                     st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
-                    # 极其美观的 Streamlit 原生折线图
-                    st.line_chart(df, height=350, use_container_width=True)
+                    
+                    # ✅ 【核心修复】：使用 Altair 强制指定 X 轴为离散字符串 (Nominal)，彻底干掉 Streamlit 的自动时区转换
+                    chart = alt.Chart(df).mark_line(point=True).encode(
+                        x=alt.X('时间:N', sort=None, title='记录时间 (北京时间)'),
+                        y=alt.Y('检出数量:Q', title='检出数量')
+                    ).properties(height=350)
+                    
+                    st.altair_chart(chart, use_container_width=True)
                     break
         else:
             st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
