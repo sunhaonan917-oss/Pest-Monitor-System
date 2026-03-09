@@ -479,6 +479,7 @@ def run_classification_mode():
 # 模式三：历史数据洞察 
 # ==========================================================
 def run_history_mode():
+    # 去掉了“与截图归档”的文案，专注历史记录展示
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
 
     log_file = os.path.join(save_dir, "auto_curve_history.json")
@@ -490,7 +491,7 @@ def run_history_mode():
                     records.append(json.loads(line))
 
         if records:
-            st.success(f"✅ 在设定目录中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
+            st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
             # 倒序排列，让最新的记录在最上面
             options = [r["timestamp"] for r in reversed(records)]
             selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
@@ -501,12 +502,13 @@ def run_history_mode():
                     df = pd.DataFrame(r["data"])
                     df.set_index("时间", inplace=True)
                     st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
+                    # 极其美观的 Streamlit 原生折线图
                     st.line_chart(df, height=350, use_container_width=True)
                     break
         else:
             st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
     else:
-        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据。")
+        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
 
 
 # ---------------------------
