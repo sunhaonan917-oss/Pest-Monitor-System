@@ -22,7 +22,7 @@ import numpy as np
 from PIL import Image
 
 # ✅ 必须是第一个 Streamlit 命令
-st.set_page_config(page_title="草地贪夜蛾检测平台", layout="wide")
+st.set_page_config(page_title="智能害虫检测平台", layout="wide")
 
 # 确保能 import src/ 与 methods/
 APP_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -122,19 +122,21 @@ def auto_curve_logger():
                 now_str = current_time.strftime("%H:%M:%S")
                 buffer_20s.append({"时间": now_str, "检出数量": count})
 
-                if len(buffer_20s) > 20:
+                # ✅ 为了拿到“前10秒 + 中心0秒 + 后10秒”，我们需要保留 21 个数据点
+                if len(buffer_20s) > 21:
                     buffer_20s.pop(0)
 
-            # ✅ 【修复只有一个点的问题】：
-            # 条件1：current_time.second <= 3 (抓住每分钟刚开始的 0~3 秒，防止错过)
-            # 条件2：current_time.minute != last_save_minute (保证这分钟只存一次)
-            # 条件3：len(buffer_20s) >= 10 (要求缓存里至少攒够 10 个数据点，拒绝早产)
-            if current_time.second <= 3 and current_time.minute != last_save_minute and len(buffer_20s) >= 10:
+            # ✅ 【核心逻辑修正：精准抓取整分前后 10 秒】
+            # 策略：不急于在 0 秒时保存，而是等时间走到 10 秒的时候再保存。
+            # 这样此时 buffer_20s 里存的正好是：前一分钟的50秒 ~ 这一分钟的10秒（完美的前后10秒）
+            if 10 <= current_time.second <= 14 and current_time.minute != last_save_minute and len(buffer_20s) >= 20:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
+                # 把记录的时间戳“强行”修正为这分钟的 00 秒（代表这个时段的中心时刻）
+                center_time = current_time.replace(second=0, microsecond=0)
                 record = {
-                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": center_time.strftime("%Y-%m-%d %H:%M:%S"),
                     "data": buffer_20s.copy()
                 }
                 with open(log_file, "a", encoding="utf-8") as f:
@@ -479,7 +481,6 @@ def run_classification_mode():
 # 模式三：历史数据洞察 
 # ==========================================================
 def run_history_mode():
-    # 去掉了“与截图归档”的文案，专注历史记录展示
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
 
     log_file = os.path.join(save_dir, "auto_curve_history.json")
@@ -494,21 +495,22 @@ def run_history_mode():
             st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
             # 倒序排列，让最新的记录在最上面
             options = [r["timestamp"] for r in reversed(records)]
-            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
+            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分记录其前后10秒数据):", options)
 
             # 重绘图表
             for r in records:
                 if r["timestamp"] == selected_time:
                     df = pd.DataFrame(r["data"])
                     df.set_index("时间", inplace=True)
-                    st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
+                    # ✅ 文案修正为前后10秒
+                    st.markdown(f"#### 📊 {selected_time} 前后 10 秒目标数量走势")
                     # 极其美观的 Streamlit 原生折线图
                     st.line_chart(df, height=350, use_container_width=True)
                     break
         else:
-            st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
+            st.info("🕒 数据记录文件为空。系统会在每逢整分后的第 10 秒保存数据（获取整点前后10秒的数据），请稍后再来看看。")
     else:
-        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
+        st.info(f"📂 暂无历史曲线。系统会在每逢整分后的第 10 秒自动存入 {save_dir}/auto_curve_history.json 中。")
 
 
 # ---------------------------
@@ -522,4 +524,3 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
-
