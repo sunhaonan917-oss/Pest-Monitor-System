@@ -33,16 +33,13 @@ from src.preprocess import load_image_to_tensor
 CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
-JETSON_IP = "47.102.216.39"
-JETSON_PORT = "5000"
+
+# ✅ 替换为你的 Ngrok HTTPS 终极通道
+NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
 
 # 【关键点】作为前端网页和后台线程通信的桥梁
 global_config = {"save_dir": "C:/Screenshots"}
 
-# ---------------------------
-# CSS 样式
-# ---------------------------
-# ---------------------------
 # ---------------------------
 # CSS 样式
 # ---------------------------
@@ -87,7 +84,8 @@ if 'save_dir' not in st.session_state:
 # 后台隐形守护线程：每分钟自动保存过去20秒的曲线
 # ==========================================================
 def auto_curve_logger():
-    count_url = f"http://{JETSON_IP}:{JETSON_PORT}/get_count"
+    # ✅ 改用 NGROK_URL
+    count_url = f"{NGROK_URL}/get_count"
     buffer_20s = []
     last_save_minute = -1
 
@@ -146,7 +144,7 @@ def bytes_to_filelike(b: bytes): return io.BytesIO(b)
 def bytes_to_pil(b: bytes): return Image.open(io.BytesIO(b)).convert("RGB")
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_resource
 def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
     dev = torch.device(device_str)
     model = build_model(n_way=5, n_support=5, backbone_name=backbone_name)
@@ -210,9 +208,10 @@ def run_detection_mode():
     st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
                 unsafe_allow_html=True)
 
-    stream_url = f"http://{JETSON_IP}:{JETSON_PORT}/video_feed"
-    snapshot_url = f"http://{JETSON_IP}:{JETSON_PORT}/snapshot"
-    count_url = f"http://{JETSON_IP}:{JETSON_PORT}/get_count"
+    # ✅ 改用 NGROK_URL
+    stream_url = f"{NGROK_URL}/video_feed"
+    snapshot_url = f"{NGROK_URL}/snapshot"
+    count_url = f"{NGROK_URL}/get_count"
 
     st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 20px;">
@@ -476,6 +475,4 @@ elif main_task == "害虫检测计数":
 elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
-
     run_history_mode()
-
