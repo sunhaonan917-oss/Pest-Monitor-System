@@ -34,7 +34,7 @@ CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
 
-# ✅ [唯一修改的地方]：在这里加入了 User-Agent，把代码伪装成真实的 Google Chrome 浏览器，Ngrok 就不会拦截了！
+# ✅ Ngrok 网址与防拦截配置
 NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
 NGROK_HEADERS = {
     "ngrok-skip-browser-warning": "any",
@@ -45,7 +45,7 @@ NGROK_HEADERS = {
 JETSON_IP = "100.104.20.74"
 JETSON_PORT = "5000"
 
-# ✅ 自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
+# 自动在当前目录下建立文件夹，解决云端无 C盘 导致的后台报错
 SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
 os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
 
@@ -53,7 +53,7 @@ os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
 global_config = {"save_dir": SAFE_SAVE_DIR}
 
 # ---------------------------
-# CSS 样式 (100% 保持你原来的)
+# CSS 样式 
 # ---------------------------
 st.markdown("""
     <style>
@@ -62,10 +62,9 @@ st.markdown("""
     .app-title p { margin: 6px 0 0 0; color: rgba(0,0,0,0.6); }
     .card { padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.06); background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.04); margin-bottom: 12px; }
 
-    /* 👇 修复侧边栏单选按钮垂直不对齐的问题 */
     label[data-baseweb="radio"] {
-        align-items: center !important; /* 强制红点和文字垂直居中对齐 */
-        margin-bottom: 16px !important; /* 用外边距拉开选项之间的距离，不再挤在一起 */
+        align-items: center !important; 
+        margin-bottom: 16px !important; 
     }
 
     section[data-testid="stSidebar"] .stRadio p,
@@ -73,8 +72,8 @@ st.markdown("""
     .stRadio label p {
         font-size: 20px !important;  
         font-weight: 600 !important; 
-        line-height: normal !important; /* 恢复正常行高，防止文字隐形框变形 */
-        margin-top: 2px !important;     /* 微调文字重心，使其与红点绝对水平 */
+        line-height: normal !important; 
+        margin-top: 2px !important;     
     }
     </style>
     """, unsafe_allow_html=True)
@@ -144,9 +143,7 @@ if 'logger_thread_started' not in st.session_state:
 # ---------------------------
 def bytes_to_filelike(b: bytes): return io.BytesIO(b)
 
-
 def bytes_to_pil(b: bytes): return Image.open(io.BytesIO(b)).convert("RGB")
-
 
 @st.cache(allow_output_mutation=True)
 def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
@@ -174,7 +171,20 @@ st.session_state.save_dir = st.sidebar.text_input("截图与数据保存目录",
 global_config["save_dir"] = st.session_state.save_dir
 save_dir = st.session_state.save_dir
 
+# ✅ 【唯一新增的排版修改】在这里加上一个漂亮的信息展示框，明确告知存储位置
+st.sidebar.info(f"""
+💡 **存储位置状态：**
+
+* 🖼️ **手动保存截图/TXT**：
+将由浏览器接管，默认下载至您的电脑本机。
+*(注：建议将您浏览器的默认下载路径设置为 `{save_dir}` ，以实现无缝归档)*
+
+* 📈 **后台趋势 JSON 数据**：
+已自动绑定至目录：`{save_dir}`
+""")
+
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
+
 
 # ==========================================================
 # 模式零：平台首页
@@ -394,95 +404,3 @@ def run_classification_mode():
 
     if not os.path.exists(CKPT_PATH):
         st.error(f"找不到权重文件：{CKPT_PATH}")
-        return
-    model = load_model_cached(CKPT_PATH, str(device), BACKBONE_NAME)
-
-    if page == "① 上传支持集":
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("第1步：自定义类别名")
-        for i in range(5):
-            st.session_state.class_names[i] = st.text_input(f"类别 {i}", st.session_state.class_names[i], key=f"cn_{i}")
-
-        st.subheader("第2步：上传参考图 (每类5张)")
-        for i in range(5):
-            with st.expander(f"上传 {st.session_state.class_names[i]}"):
-                files = st.file_uploader("选择图片", type=["png", "jpg"], accept_multiple_files=True, key=f"up_{i}")
-                if files: st.session_state.support_bytes[i] = [f.getvalue() for f in files[:5]]
-                imgs = st.session_state.support_bytes[i]
-                if imgs: st.image([bytes_to_pil(b) for b in imgs], width=120)
-        st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("第3步：上传待识别图片")
-        q = st.file_uploader("上传 query", type=["png", "jpg"], key="qu")
-        if q: st.session_state.query_bytes = q.getvalue()
-        if st.session_state.query_bytes:
-            st.image(bytes_to_pil(st.session_state.query_bytes), caption="待识别图", width=400)
-            if st.button("开始推理"):
-                support_tensors = []
-                support_labels = []
-                for i in range(5):
-                    for b in st.session_state.support_bytes[i]:
-                        support_tensors.append(load_image_to_tensor(bytes_to_filelike(b)))
-                        support_labels.append(i)
-                if len(support_tensors) < 25:
-                    st.error("Support 数据不足：每类必须上传 5 张图片。")
-                else:
-                    with st.spinner("推理中..."):
-                        x_s = torch.stack(support_tensors).to(device)
-                        y_s = torch.tensor(support_labels).to(device)
-                        x_q = load_image_to_tensor(bytes_to_filelike(st.session_state.query_bytes)).unsqueeze(0).to(
-                            device)
-                        logits = predict_5way5shot_one_query(model, x_s, y_s, x_q, device)
-                        res = torch.argmax(logits).item()
-                        st.success(f"识别结果：{st.session_state.class_names[res]}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ==========================================================
-# 模式三：历史数据洞察 (去除了画廊，完美保留折线图分析)
-# ==========================================================
-def run_history_mode():
-    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
-
-    # 选项卡已删除，直接在当前页面展示历史折线图
-    log_file = os.path.join(save_dir, "auto_curve_history.json")
-    if os.path.exists(log_file):
-        records = []
-        with open(log_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    records.append(json.loads(line))
-
-        if records:
-            st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
-            # 倒序排列，让最新的记录在最上面
-            options = [r["timestamp"] for r in reversed(records)]
-            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
-
-            # 重绘图表
-            for r in records:
-                if r["timestamp"] == selected_time:
-                    df = pd.DataFrame(r["data"])
-                    df.set_index("时间", inplace=True)
-                    st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
-                    # 极其美观的 Streamlit 原生折线图
-                    st.line_chart(df, height=350, use_container_width=True)
-                    break
-        else:
-            st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
-    else:
-        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
-
-
-# ---------------------------
-# 主程序路由
-# ---------------------------
-if main_task == "平台首页":
-    run_home_mode()
-elif main_task == "害虫检测计数":
-    run_detection_mode()
-elif main_task == "害虫精确分类":
-    run_classification_mode()
-elif main_task == "历史数据管理":
-    run_history_mode()
