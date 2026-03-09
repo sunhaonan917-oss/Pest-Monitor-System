@@ -4,22 +4,22 @@ import io
 import time
 import json
 import threading
+import glob
 import requests
 import pandas as pd
-# ✅ 引入 timezone 用于计算和强制绑定北京时间
-from datetime import datetime, timedelta, timezone
-
-# ✅ 强制修改 Streamlit Cloud 服务器底层的时区为北京时间 (UTC+8)
-os.environ['TZ'] = 'Asia/Shanghai'
-if hasattr(time, 'tzset'):
-    time.tzset()
-
+# ✅ 引入 timezone 和 timedelta 用于修正云端时区
+from datetime import datetime, timezone, timedelta
 import streamlit as st
 import streamlit.components.v1 as components
 import torch
 import uuid
 import numpy as np
 from PIL import Image
+
+# ✅ 强制修改 Streamlit Cloud 服务器底层的时区为北京时间 (UTC+8)
+os.environ['TZ'] = 'Asia/Shanghai'
+if hasattr(time, 'tzset'):
+    time.tzset()
 
 # ✅ 必须是第一个 Streamlit 命令
 st.set_page_config(page_title="智能害虫检测平台", layout="wide")
@@ -39,23 +39,14 @@ from src.preprocess import load_image_to_tensor
 CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
-
-# ✅ Ngrok 网址配置 (云端部署必须用这个代替内网 IP)
-NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
-NGROK_HEADERS = {
-    "ngrok-skip-browser-warning": "any",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
-# 自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
-SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
-os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
+JETSON_IP = "100.104.20.74"
+JETSON_PORT = "5000"
 
 # 【关键点】作为前端网页和后台线程通信的桥梁
-global_config = {"save_dir": SAFE_SAVE_DIR}
+global_config = {"save_dir": "C:/Screenshots"}
 
 # ---------------------------
-# CSS 样式 (整合了你超大字体的暴力破解法)
+# CSS 样式
 # ---------------------------
 st.markdown("""
     <style>
@@ -68,11 +59,12 @@ st.markdown("""
     section[data-testid="stSidebar"] .stRadio p,
     div[role="radiogroup"] p,
     .stRadio label p {
-        font-size: 20px !important;  
-        font-weight: 600 !important; 
-        line-height: 2 !important;   
+        font-size: 20px !important;  /* 这里我直接给你调到 20px，保证肉眼可见的变大 */
+        font-weight: 600 !important; /* 加粗显示 */
+        line-height: 2 !important;   /* 把选项上下的间距也拉开一点，免得字变大后挤在一起 */
     }
 
+    /* 顺便把上面“选择功能模式：”这个小标题的字号也稍微调大一点点适配 */
     .stRadio label[data-baseweb="radio"] {
         margin-bottom: 10px;
     }
@@ -93,54 +85,62 @@ if 'save_dir' not in st.session_state:
 
 
 # ==========================================================
-# 后台隐形守护线程：完美抓取整分前后 10 秒曲线
+# 后台隐形守护线程：每逢整分后第10秒，自动保存其前后10秒的曲线
 # ==========================================================
 def auto_curve_logger():
-    count_url = f"{NGROK_URL}/get_count"
-    buffer_20s = []
+    count_url = f"http://{JETSON_IP}:{JETSON_PORT}/get_count"
+    # ✅ 既然要存前后 10 秒加中心时间点，一共存 21 个点最合适
+    buffer_21s = []
     last_save_minute = -1
+    
+    # ✅ 构造固定的北京时区 (UTC+8)
     BJ_TZ = timezone(timedelta(hours=8))
 
     while True:
+        # 从全局字典获取最新的保存路径
         current_save_dir = global_config["save_dir"]
 
         try:
-            # ✅ 吸收你的经验：缩短 timeout 到 2 秒，防止线程假死错过触发时间
-            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=2)
+            res = requests.get(count_url, timeout=2)
+            # ✅ 获取北京时间
             current_time = datetime.now(BJ_TZ)
-
+            
             if res.status_code == 200:
                 count = res.json().get("count", 0)
                 now_str = current_time.strftime("%H:%M:%S")
-                buffer_20s.append({"时间": now_str, "检出数量": count})
+                # 记录时间戳和数量
+                buffer_21s.append({"时间": now_str, "检出数量": count})
 
-                # 保持列表里有最近的 21 条数据（包含前10秒，当前秒，后10秒）
-                if len(buffer_20s) > 21:
-                    buffer_20s.pop(0)
+                # 保持列表里存 21 条数据
+                if len(buffer_21s) > 21:
+                    buffer_21s.pop(0)
 
-            # ✅ 核心修复：放宽条件 (len > 0)，不再苛求绝对的 20 条，避免掉帧导致不保存
-            # 触发条件：跑到第 10~12 秒区间触发，完美抓取前一分钟的 [50秒~10秒] 数据
-            if 10 <= current_time.second <= 12 and current_time.minute != last_save_minute and len(buffer_20s) > 0:
+            # ✅ 触发条件修正：等时间走到第 10~12 秒时才触发，这样缓存里刚好是 [上分钟的50秒 ~ 这分钟的10秒]
+            if 10 <= current_time.second <= 12 and current_time.minute != last_save_minute and len(buffer_21s) > 0:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
-                # 将记录的时间戳“强行”修正为这分钟的 00 秒
+                # ✅ 把记录的时间戳“强行”对齐修正为这分钟的 00 秒（作为中心时刻）
                 center_time = current_time.replace(second=0, microsecond=0)
+                
+                # 打包记录
                 record = {
                     "timestamp": center_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "data": buffer_20s.copy()
+                    "data": buffer_21s.copy()
                 }
+                # 追加写入 JSON 文件
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                last_save_minute = current_time.minute
+                last_save_minute = current_time.minute  # 标记这一分钟已经存过
 
         except Exception as e:
-            pass
+            pass  # 如果 Jetson 关机了，后台线程保持静默，不报错干扰系统
 
-        time.sleep(1)
+        time.sleep(1)  # 每秒拉取一次
 
 
+# 确保线程只在网页第一次加载时启动一次
 if 'logger_thread_started' not in st.session_state:
     t = threading.Thread(target=auto_curve_logger, daemon=True)
     t.start()
@@ -152,7 +152,9 @@ if 'logger_thread_started' not in st.session_state:
 # ---------------------------
 def bytes_to_filelike(b: bytes): return io.BytesIO(b)
 
+
 def bytes_to_pil(b: bytes): return Image.open(io.BytesIO(b)).convert("RGB")
+
 
 @st.cache(allow_output_mutation=True)
 def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
@@ -165,28 +167,32 @@ def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
 # ---------------------------
 # Sidebar 侧边栏
 # ---------------------------
+# 替换为虫子图标 🐛
 st.sidebar.markdown('## 🐛 草地贪夜蛾监测平台')
 
+# 菜单中加入“平台首页”，并作为默认启动页
 main_task = st.sidebar.radio(
     "选择功能模式：",
     ["平台首页", "害虫检测计数", "害虫精确分类", "历史数据管理"],
     index=0
 )
 
+# 截图保存路径配置
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 历史数据与存储配置")
 st.session_state.save_dir = st.sidebar.text_input("截图与数据保存目录", value=st.session_state.save_dir)
 
-global_config["save_dir"] = SAFE_SAVE_DIR
-save_dir = SAFE_SAVE_DIR
+# 实时更新全局字典，供后台线程读取
+global_config["save_dir"] = st.session_state.save_dir
+save_dir = st.session_state.save_dir
 
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
 
-
 # ==========================================================
-# 模式零：平台首页
+# 模式零：平台首页 (全新设计的居中介绍页)
 # ==========================================================
 def run_home_mode():
+    # 使用 HTML 和 CSS 实现完美的垂直居中与优雅排版
     st.markdown("""
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 75vh; text-align: center;">
             <h1 style="font-size: 42px; color: #2c3e50; margin-bottom: 20px;">🐛 欢迎使用草地贪夜蛾智能监测平台</h1>
@@ -208,15 +214,15 @@ def run_home_mode():
 
 
 # ==========================================================
-# 模式一：实时目标检测
+# 模式一：实时目标检测 (专业 UI 包装 + 左右分栏版)
 # ==========================================================
 def run_detection_mode():
     st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
                 unsafe_allow_html=True)
 
-    stream_url = f"{NGROK_URL}/video_feed"
-    snapshot_url = f"{NGROK_URL}/snapshot"
-    count_url = f"{NGROK_URL}/get_count"
+    stream_url = f"http://{JETSON_IP}:{JETSON_PORT}/video_feed"
+    snapshot_url = f"http://{JETSON_IP}:{JETSON_PORT}/snapshot"
+    count_url = f"http://{JETSON_IP}:{JETSON_PORT}/get_count"
 
     st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 20px;">
@@ -244,14 +250,7 @@ def run_detection_mode():
             <script>
                 var liveStream = document.getElementById('live_stream');
                 setInterval(() => {{
-                    fetch("{snapshot_url}?t=" + new Date().getTime(), {{
-                        headers: {{ "ngrok-skip-browser-warning": "any" }}
-                    }})
-                    .then(response => response.blob())
-                    .then(blob => {{
-                        liveStream.src = URL.createObjectURL(blob);
-                    }})
-                    .catch(err => console.log('等待边缘端响应...'));
+                    liveStream.src = "{snapshot_url}?t=" + new Date().getTime();
                 }}, 150); 
             </script>
         </body>
@@ -262,91 +261,37 @@ def run_detection_mode():
     with col_right:
         st.markdown("#### 📸 监控控制台")
 
-        # 🟢 前端直接下载代码
-        download_buttons_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                .btn {{
-                    display: inline-flex; align-items: center; justify-content: center;
-                    width: 100%; padding: 0.5rem 1rem; margin-bottom: 15px;
-                    background-color: white; border: 1px solid rgba(49, 51, 63, 0.2);
-                    border-radius: 0.5rem; color: rgb(49, 51, 63);
-                    font-size: 1rem; font-weight: 400; cursor: pointer;
-                    text-decoration: none; font-family: "Source Sans Pro", sans-serif;
-                    transition: all 0.2s ease;
-                }}
-                .btn:hover {{ border-color: rgb(255, 75, 75); color: rgb(255, 75, 75); }}
-            </style>
-        </head>
-        <body style="margin: 0; padding: 0; background-color: transparent;">
-            <button class="btn" onclick="saveImage()">🖼️ 一键保存当前画面</button>
-            <button class="btn" onclick="saveTxt()">📝 记录当前数量到 TXT</button>
+        # 1. 原有的：保存带有检测框的画面
+        if st.button("🖼️ 一键保存当前画面"):
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            file_path = os.path.join(save_dir, f"pest_det_{timestamp}.jpg")
+            try:
+                response = requests.get(snapshot_url, timeout=5)
+                if response.status_code == 200:
+                    with open(file_path, "wb") as f:
+                        f.write(response.content)
+                    st.success(f"✅ 已保存: {file_path}")
+            except Exception as e:
+                st.error("截屏出错, 请检查网络。")
 
-            <script>
-                async function saveImage() {{
-                    try {{
-                        const res = await fetch("{snapshot_url}?t=" + Date.now(), {{
-                            headers: {{ "ngrok-skip-browser-warning": "any" }}
-                        }});
-                        const blob = await res.blob();
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        
-                        // ✅ 强制转换浏览器本地时间为准确的北京时间
-                        const beijingStr = new Date().toLocaleString("en-US", {{timeZone: "Asia/Shanghai"}});
-                        const now = new Date(beijingStr);
-                        const timeStr = now.getFullYear() + 
-                                        ('0' + (now.getMonth() + 1)).slice(-2) + 
-                                        ('0' + now.getDate()).slice(-2) + '_' + 
-                                        ('0' + now.getHours()).slice(-2) + 
-                                        ('0' + now.getMinutes()).slice(-2) + 
-                                        ('0' + now.getSeconds()).slice(-2);
-                                        
-                        a.download = 'pest_det_' + timeStr + '.jpg';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    }} catch(e) {{ alert("下载失败，请确认视频流是否正常。"); }}
-                }}
 
-                async function saveTxt() {{
-                    try {{
-                        const res = await fetch("{count_url}", {{
-                            headers: {{ "ngrok-skip-browser-warning": "any" }}
-                        }});
-                        const data = await res.json();
-                        
-                        // ✅ TXT 记录内部强设北京时间
-                        const timeStr = new Date().toLocaleString('zh-CN', {{ timeZone: 'Asia/Shanghai', hour12: false }});
-                        const text = "[" + timeStr + "] 发现草地贪夜蛾目标数量: " + data.count + " 只\\n";
-                        
-                        const blob = new Blob([text], {{ type: 'text/plain;charset=utf-8' }});
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        
-                        // ✅ 文件名强设北京时间
-                        const beijingStr = new Date().toLocaleString("en-US", {{timeZone: "Asia/Shanghai"}});
-                        const now = new Date(beijingStr);
-                        const fileTime = now.getFullYear() + 
-                                        ('0' + (now.getMonth() + 1)).slice(-2) + 
-                                        ('0' + now.getDate()).slice(-2) + '_' + 
-                                        ('0' + now.getHours()).slice(-2) + 
-                                        ('0' + now.getMinutes()).slice(-2) + 
-                                        ('0' + now.getSeconds()).slice(-2);
-                                        
-                        a.download = 'pest_count_' + fileTime + '.txt';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    }} catch(e) {{ alert("下载计数失败。"); }}
-                }}
-            </script>
-        </body>
-        </html>
-        """
-        components.html(download_buttons_html, height=130)
+        # 3. 原有的：记录数量
+        if st.button("📝 记录当前数量到 TXT"):
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+            txt_path = os.path.join(save_dir, "pest_count_log.txt")
+            try:
+                res = requests.get(count_url, timeout=5)
+                if res.status_code == 200:
+                    count = res.json().get("count", 0)
+                    timestamp_txt = time.strftime("%Y-%m-%d %H:%M:%S")
+                    with open(txt_path, "a", encoding="utf-8") as f:
+                        f.write(f"[{timestamp_txt}] 发现草地贪夜蛾目标数量: {count} 只\n")
+                    st.success("✅ 日志已追加")
+            except Exception as e:
+                st.error("网络请求失败。")
 
         st.markdown("---")
         st.markdown("#### 📈 实时目标计数")
@@ -390,7 +335,7 @@ def run_detection_mode():
                 }});
 
                 setInterval(() => {{
-                    fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
+                    fetch('{count_url}')
                         .then(response => response.json())
                         .then(data => {{
                             var now = new Date();
@@ -469,38 +414,68 @@ def run_classification_mode():
 
 
 # ==========================================================
-# 模式三：历史数据洞察
+# 模式三：历史数据洞察 (图表重绘与照片画廊)
 # ==========================================================
 def run_history_mode():
-    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测记录与截图归档</p></div>', unsafe_allow_html=True)
 
-    log_file = os.path.join(save_dir, "auto_curve_history.json")
-    if os.path.exists(log_file):
-        records = []
-        with open(log_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    records.append(json.loads(line))
+    # 将页面分为两个选项卡
+    tab_curve, tab_gallery = st.tabs(["📈 历史检测趋势分析", "🖼️ 本地历史截图展示"])
 
-        if records:
-            st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
-            # 倒序排列，让最新的记录在最上面
-            options = [r["timestamp"] for r in reversed(records)]
-            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统会在整分后第10秒自动保存):", options)
+    # 选项卡 1：自动保存的曲线重绘
+    with tab_curve:
+        log_file = os.path.join(save_dir, "auto_curve_history.json")
+        if os.path.exists(log_file):
+            records = []
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        records.append(json.loads(line))
 
-            # 重绘图表
-            for r in records:
-                if r["timestamp"] == selected_time:
-                    df = pd.DataFrame(r["data"])
-                    df.set_index("时间", inplace=True)
-                    st.markdown(f"#### 📊 {selected_time} 前后 10 秒目标数量走势")
-                    # 极其美观的 Streamlit 原生折线图
-                    st.line_chart(df, height=350, use_container_width=True)
-                    break
+            if records:
+                st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
+                # 倒序排列，让最新的记录在最上面
+                options = [r["timestamp"] for r in reversed(records)]
+                # ✅ 文案修改
+                selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统记录整分前后10秒数据):", options)
+
+                # 重绘图表
+                for r in records:
+                    if r["timestamp"] == selected_time:
+                        df = pd.DataFrame(r["data"])
+                        df.set_index("时间", inplace=True)
+                        # ✅ 文案修改
+                        st.markdown(f"#### 📊 {selected_time} 前后 10 秒目标数量走势")
+                        # 极其美观的 Streamlit 原生折线图
+                        st.line_chart(df, height=350, use_container_width=True)
+                        break
+            else:
+                st.info("🕒 数据记录文件为空。系统启动后，会在每逢整分后的第 10 秒自动保存一次数据，请稍后查看。")
         else:
-            st.info("🕒 数据记录文件为空。系统会在每逢整分后的第 10 秒保存数据（获取整点前后10秒的数据），请稍后再来看看。")
-    else:
-        st.info(f"📂 暂无历史曲线。系统会在每逢整分后的第 10 秒自动存入 {save_dir}/auto_curve_history.json 中。")
+            st.info(f"📂 暂无历史曲线。系统会在每逢整分后的第 10 秒，将数据存入 {save_dir}/auto_curve_history.json 中。")
+
+    # 选项卡 2：相册画廊
+    with tab_gallery:
+        # 抓取目录下所有的 jpg 和 png 图片
+        images = glob.glob(os.path.join(save_dir, "*.jpg")) + glob.glob(os.path.join(save_dir, "*.png"))
+
+        if images:
+            # 按修改时间从新到旧排序
+            images.sort(key=os.path.getmtime, reverse=True)
+            st.markdown(f"📸 共检索到 **{len(images)}** 张本地截图文件。")
+
+            # 建立三列的自适应照片墙
+            cols = st.columns(3)
+            for idx, img_path in enumerate(images):
+                with cols[idx % 3]:
+                    # 【核心修复】：用 PIL 强行把图片读到内存里，破解浏览器的本地路径拦截
+                    try:
+                        img_data = Image.open(img_path)
+                        st.image(img_data, caption=os.path.basename(img_path))
+                    except Exception as e:
+                        st.error(f"图片加载失败: {e}")
+        else:
+            st.info(f"🚫 目录 {save_dir} 中暂无保存的图像文件，您可以在检测页面点击【一键保存当前画面】。")
 
 
 # ---------------------------
