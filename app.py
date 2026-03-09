@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 # ✅ 必须是第一个 Streamlit 命令
-st.set_page_config(page_title="智能害虫检测平台", layout="wide")
+st.set_page_config(page_title="草地贪夜蛾监测平台", layout="wide")
 
 # 确保能 import src/ 与 methods/
 APP_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -506,3 +506,4 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
+
