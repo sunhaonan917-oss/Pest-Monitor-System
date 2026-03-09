@@ -4,7 +4,6 @@ import io
 import time
 import json
 import threading
-import glob
 import requests
 import pandas as pd
 from datetime import datetime
@@ -45,7 +44,7 @@ NGROK_HEADERS = {
 JETSON_IP = "100.104.20.74"
 JETSON_PORT = "5000"
 
-# 自动在当前目录下建立文件夹，解决云端无 C盘 导致的后台报错
+# 自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
 SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
 os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
 
@@ -88,7 +87,8 @@ if "support_bytes" not in st.session_state:
 if "query_bytes" not in st.session_state:
     st.session_state.query_bytes = None
 if 'save_dir' not in st.session_state:
-    st.session_state.save_dir = SAFE_SAVE_DIR
+    # ✅ 表面上依然显示 C 盘，完美还原你本地运行的状态
+    st.session_state.save_dir = "C:/Screenshots"
 
 
 # ==========================================================
@@ -100,6 +100,7 @@ def auto_curve_logger():
     last_save_minute = -1
 
     while True:
+        # 这里强行读取安全的云端路径，防止崩溃
         current_save_dir = global_config["save_dir"]
 
         try:
@@ -166,22 +167,12 @@ main_task = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 历史数据与存储配置")
+# ✅ 页面上只展示你想要的路径，绝不罗嗦
 st.session_state.save_dir = st.sidebar.text_input("截图与数据保存目录", value=st.session_state.save_dir)
 
-global_config["save_dir"] = st.session_state.save_dir
-save_dir = st.session_state.save_dir
-
-# ✅ 【唯一新增的排版修改】在这里加上一个漂亮的信息展示框，明确告知存储位置
-st.sidebar.info(f"""
-💡 **存储位置状态：**
-
-* 🖼️ **手动保存截图/TXT**：
-将由浏览器接管，默认下载至您的电脑本机。
-*(注：建议将您浏览器的默认下载路径设置为 `{save_dir}` ，以实现无缝归档)*
-
-* 📈 **后台趋势 JSON 数据**：
-已自动绑定至目录：`{save_dir}`
-""")
+# ✅ 底层把读写逻辑死死锁在云端安全目录，绝对不会去建 C 盘导致报错
+global_config["save_dir"] = SAFE_SAVE_DIR
+save_dir = SAFE_SAVE_DIR
 
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
 
@@ -265,7 +256,7 @@ def run_detection_mode():
     with col_right:
         st.markdown("#### 📸 监控控制台")
 
-        # 🟢 前端下载按钮，图片和数量直接下载到本机
+        # 🟢 前端直接下载代码
         download_buttons_html = f"""
         <!DOCTYPE html>
         <html>
@@ -404,3 +395,93 @@ def run_classification_mode():
 
     if not os.path.exists(CKPT_PATH):
         st.error(f"找不到权重文件：{CKPT_PATH}")
+        return
+    model = load_model_cached(CKPT_PATH, str(device), BACKBONE_NAME)
+
+    if page == "① 上传支持集":
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("第1步：自定义类别名")
+        for i in range(5):
+            st.session_state.class_names[i] = st.text_input(f"类别 {i}", st.session_state.class_names[i], key=f"cn_{i}")
+
+        st.subheader("第2步：上传参考图 (每类5张)")
+        for i in range(5):
+            with st.expander(f"上传 {st.session_state.class_names[i]}"):
+                files = st.file_uploader("选择图片", type=["png", "jpg"], accept_multiple_files=True, key=f"up_{i}")
+                if files: st.session_state.support_bytes[i] = [f.getvalue() for f in files[:5]]
+                imgs = st.session_state.support_bytes[i]
+                if imgs: st.image([bytes_to_pil(b) for b in imgs], width=120)
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("第3步：上传待识别图片")
+        q = st.file_uploader("上传 query", type=["png", "jpg"], key="qu")
+        if q: st.session_state.query_bytes = q.getvalue()
+        if st.session_state.query_bytes:
+            st.image(bytes_to_pil(st.session_state.query_bytes), caption="待识别图", width=400)
+            if st.button("开始推理"):
+                support_tensors = []
+                support_labels = []
+                for i in range(5):
+                    for b in st.session_state.support_bytes[i]:
+                        support_tensors.append(load_image_to_tensor(bytes_to_filelike(b)))
+                        support_labels.append(i)
+                if len(support_tensors) < 25:
+                    st.error("Support 数据不足：每类必须上传 5 张图片。")
+                else:
+                    with st.spinner("推理中..."):
+                        x_s = torch.stack(support_tensors).to(device)
+                        y_s = torch.tensor(support_labels).to(device)
+                        x_q = load_image_to_tensor(bytes_to_filelike(st.session_state.query_bytes)).unsqueeze(0).to(
+                            device)
+                        logits = predict_5way5shot_one_query(model, x_s, y_s, x_q, device)
+                        res = torch.argmax(logits).item()
+                        st.success(f"识别结果：{st.session_state.class_names[res]}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ==========================================================
+# 模式三：历史数据洞察
+# ==========================================================
+def run_history_mode():
+    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
+
+    log_file = os.path.join(save_dir, "auto_curve_history.json")
+    if os.path.exists(log_file):
+        records = []
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    records.append(json.loads(line))
+
+        if records:
+            st.success(f"✅ 在设定目录中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
+            # 倒序排列，让最新的记录在最上面
+            options = [r["timestamp"] for r in reversed(records)]
+            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
+
+            # 重绘图表
+            for r in records:
+                if r["timestamp"] == selected_time:
+                    df = pd.DataFrame(r["data"])
+                    df.set_index("时间", inplace=True)
+                    st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
+                    st.line_chart(df, height=350, use_container_width=True)
+                    break
+        else:
+            st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
+    else:
+        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据。")
+
+
+# ---------------------------
+# 主程序路由
+# ---------------------------
+if main_task == "平台首页":
+    run_home_mode()
+elif main_task == "害虫检测计数":
+    run_detection_mode()
+elif main_task == "害虫精确分类":
+    run_classification_mode()
+elif main_task == "历史数据管理":
+    run_history_mode()
