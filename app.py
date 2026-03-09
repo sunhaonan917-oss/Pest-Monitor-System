@@ -201,15 +201,16 @@ def run_home_mode():
 
 
 # ==========================================================
-# 模式一：实时目标检测
+# ==========================================================
+# 模式一：实时目标检测 (专业 UI 包装 + 左右分栏版)
 # ==========================================================
 def run_detection_mode():
     st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
                 unsafe_allow_html=True)
 
-    stream_url = f"{NGROK_URL}/video_feed"
-    snapshot_url = f"{NGROK_URL}/snapshot"
-    count_url = f"{NGROK_URL}/get_count"
+    stream_url = f"http://{JETSON_IP}:{JETSON_PORT}/video_feed"
+    snapshot_url = f"http://{JETSON_IP}:{JETSON_PORT}/snapshot"
+    count_url = f"http://{JETSON_IP}:{JETSON_PORT}/get_count"
 
     st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 20px;">
@@ -237,14 +238,7 @@ def run_detection_mode():
             <script>
                 var liveStream = document.getElementById('live_stream');
                 setInterval(() => {{
-                    fetch("{snapshot_url}?t=" + new Date().getTime(), {{
-                        headers: {{ "ngrok-skip-browser-warning": "any" }}
-                    }})
-                    .then(response => response.blob())
-                    .then(blob => {{
-                        liveStream.src = URL.createObjectURL(blob);
-                    }})
-                    .catch(err => console.log('等待边缘端响应...'));
+                    liveStream.src = "{snapshot_url}?t=" + new Date().getTime();
                 }}, 150); 
             </script>
         </body>
@@ -254,9 +248,10 @@ def run_detection_mode():
 
     with col_right:
         st.markdown("#### 📸 监控控制台")
-        st.info("💡 提示：文件将直接通过浏览器下载到您的【下载】文件夹中，彻底告别报错。")
 
-        # 使用纯前端 HTML/JS 模拟“右键另存为”的动作
+        # ==========================================================
+        # 🟢 纯浏览器前端下载按钮 (完美替代原 Python 按钮，彻底绕过报错)
+        # ==========================================================
         download_buttons_html = f"""
         <!DOCTYPE html>
         <html>
@@ -274,12 +269,11 @@ def run_detection_mode():
                 .btn:hover {{ border-color: rgb(255, 75, 75); color: rgb(255, 75, 75); }}
             </style>
         </head>
-        <body>
-            <button class="btn" onclick="saveImage()">🖼️ 一键下载当前画面</button>
-            <button class="btn" onclick="saveTxt()">📝 下载当前数量到 TXT</button>
+        <body style="margin: 0; padding: 0; background-color: transparent;">
+            <button class="btn" onclick="saveImage()">🖼️ 一键保存当前画面</button>
+            <button class="btn" onclick="saveTxt()">📝 记录当前数量到 TXT</button>
 
             <script>
-                // 模拟右键保存图片
                 async function saveImage() {{
                     try {{
                         const res = await fetch("{snapshot_url}?t=" + Date.now(), {{
@@ -288,7 +282,6 @@ def run_detection_mode():
                         const blob = await res.blob();
                         const a = document.createElement('a');
                         a.href = URL.createObjectURL(blob);
-                        // 自动生成带时间戳的文件名
                         const timeStr = new Date().toISOString().replace(/[:.-]/g, '').slice(0, 15);
                         a.download = 'pest_det_' + timeStr + '.jpg';
                         document.body.appendChild(a);
@@ -297,7 +290,6 @@ def run_detection_mode():
                     }} catch(e) {{ alert("下载失败，请确认视频流是否正常。"); }}
                 }}
 
-                // 模拟生成并保存 TXT 文件
                 async function saveTxt() {{
                     try {{
                         const res = await fetch("{count_url}", {{
@@ -321,8 +313,72 @@ def run_detection_mode():
         </body>
         </html>
         """
-        # 将 HTML 按钮嵌入网页
-        components.html(download_buttons_html, height=180)
+        components.html(download_buttons_html, height=130)
+        # ==========================================================
+
+        st.markdown("---")
+        st.markdown("#### 📈 实时目标计数")
+
+        # 👇 这里及以下的折线图代码完全是你原本的，一字不差！
+        chart_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            <style>
+                body {{ margin: 0; padding: 0; background-color: transparent; }}
+                .chart-container {{ background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; height: 280px; width: 100%; box-sizing: border-box; }}
+            </style>
+        </head>
+        <body>
+            <div class="chart-container">
+                <canvas id="pestChart"></canvas>
+            </div>
+            <script>
+                var ctx = document.getElementById('pestChart').getContext('2d');
+                var pestChart = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: [],
+                        datasets: [{{
+                            label: '检出数量',
+                            data: [],
+                            borderColor: '#FF4B4B',
+                            backgroundColor: 'rgba(255, 75, 75, 0.1)',
+                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2
+                        }}]
+                    }},
+                    options: {{ 
+                        maintainAspectRatio: false, 
+                        animation: false,
+                        scales: {{ 
+                            y: {{ beginAtZero: true, suggestedMax: 5, ticks: {{ stepSize: 1 }} }},
+                            x: {{ display: true }}
+                        }} 
+                    }}
+                }});
+
+                setInterval(() => {{
+                    fetch('{count_url}')
+                        .then(response => response.json())
+                        .then(data => {{
+                            var now = new Date();
+                            var timeStr = now.getSeconds() + 's';
+                            if(pestChart.data.labels.length > 30) {{
+                                pestChart.data.labels.shift();
+                                pestChart.data.datasets[0].data.shift();
+                            }}
+                            pestChart.data.labels.push(timeStr);
+                            pestChart.data.datasets[0].data.push(data.count);
+                            pestChart.update();
+                        }})
+                        .catch(err => console.log('等待边缘端响应...'));
+                }}, 1000);
+            </script>
+        </body>
+        </html>
+        """
+        components.html(chart_html, height=350)
 
 
 # ==========================================================
@@ -455,4 +511,5 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
+
 
