@@ -6,7 +6,8 @@ import json
 import threading
 import requests
 import pandas as pd
-from datetime import datetime
+# ✅ 引入 timedelta 用于计算北京时间
+from datetime import datetime, timedelta
 import streamlit as st
 import streamlit.components.v1 as components
 import torch
@@ -15,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 # ✅ 必须是第一个 Streamlit 命令
-st.set_page_config(page_title="草地贪夜蛾监测平台", layout="wide")
+st.set_page_config(page_title="智能害虫检测平台", layout="wide")
 
 # 确保能 import src/ 与 methods/
 APP_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -87,7 +88,6 @@ if "support_bytes" not in st.session_state:
 if "query_bytes" not in st.session_state:
     st.session_state.query_bytes = None
 if 'save_dir' not in st.session_state:
-    # ✅ 表面上依然显示 C 盘，完美还原你本地运行的状态
     st.session_state.save_dir = "C:/Screenshots"
 
 
@@ -100,24 +100,27 @@ def auto_curve_logger():
     last_save_minute = -1
 
     while True:
-        # 这里强行读取安全的云端路径，防止崩溃
         current_save_dir = global_config["save_dir"]
 
         try:
             res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
+            
+            # ✅ 【修复时区问题】：强制使用 UTC 时间 + 8小时，得到准确的北京时间
+            current_time = datetime.utcnow() + timedelta(hours=8)
+
             if res.status_code == 200:
                 count = res.json().get("count", 0)
-                now_str = datetime.now().strftime("%H:%M:%S")
+                now_str = current_time.strftime("%H:%M:%S")
                 buffer_20s.append({"时间": now_str, "检出数量": count})
 
                 if len(buffer_20s) > 20:
                     buffer_20s.pop(0)
 
-            current_time = datetime.now()
-            
-            # ✅ [修复核心 Bug]：去掉苛刻的 current_time.second == 0 限制。
-            # 只要发现现在是新的一分钟，就立马保存数据，绝对不再错过保存时机！
-            if current_time.minute != last_save_minute and len(buffer_20s) > 0:
+            # ✅ 【修复只有一个点的问题】：
+            # 条件1：current_time.second <= 3 (抓住每分钟刚开始的 0~3 秒，防止错过)
+            # 条件2：current_time.minute != last_save_minute (保证这分钟只存一次)
+            # 条件3：len(buffer_20s) >= 10 (要求缓存里至少攒够 10 个数据点，拒绝早产)
+            if current_time.second <= 3 and current_time.minute != last_save_minute and len(buffer_20s) >= 10:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
@@ -170,10 +173,8 @@ main_task = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 历史数据与存储配置")
-# ✅ 页面上只展示你想要的路径，绝不罗嗦
 st.session_state.save_dir = st.sidebar.text_input("截图与数据保存目录", value=st.session_state.save_dir)
 
-# ✅ 底层把读写逻辑死死锁在云端安全目录，绝对不会去建 C 盘导致报错
 global_config["save_dir"] = SAFE_SAVE_DIR
 save_dir = SAFE_SAVE_DIR
 
@@ -290,7 +291,16 @@ def run_detection_mode():
                         const blob = await res.blob();
                         const a = document.createElement('a');
                         a.href = URL.createObjectURL(blob);
-                        const timeStr = new Date().toISOString().replace(/[:.-]/g, '').slice(0, 15);
+                        
+                        // 使用本地时间命名
+                        const now = new Date();
+                        const timeStr = now.getFullYear() + 
+                                        ('0' + (now.getMonth() + 1)).slice(-2) + 
+                                        ('0' + now.getDate()).slice(-2) + '_' + 
+                                        ('0' + now.getHours()).slice(-2) + 
+                                        ('0' + now.getMinutes()).slice(-2) + 
+                                        ('0' + now.getSeconds()).slice(-2);
+                                        
                         a.download = 'pest_det_' + timeStr + '.jpg';
                         document.body.appendChild(a);
                         a.click();
@@ -310,7 +320,15 @@ def run_detection_mode():
                         const blob = new Blob([text], {{ type: 'text/plain;charset=utf-8' }});
                         const a = document.createElement('a');
                         a.href = URL.createObjectURL(blob);
-                        const fileTime = new Date().toISOString().replace(/[:.-]/g, '').slice(0, 15);
+                        
+                        const now = new Date();
+                        const fileTime = now.getFullYear() + 
+                                        ('0' + (now.getMonth() + 1)).slice(-2) + 
+                                        ('0' + now.getDate()).slice(-2) + '_' + 
+                                        ('0' + now.getHours()).slice(-2) + 
+                                        ('0' + now.getMinutes()).slice(-2) + 
+                                        ('0' + now.getSeconds()).slice(-2);
+                                        
                         a.download = 'pest_count_' + fileTime + '.txt';
                         document.body.appendChild(a);
                         a.click();
@@ -444,7 +462,7 @@ def run_classification_mode():
 
 
 # ==========================================================
-# 模式三：历史数据洞察
+# 模式三：历史数据洞察 
 # ==========================================================
 def run_history_mode():
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
@@ -488,4 +506,3 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
-
