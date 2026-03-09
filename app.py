@@ -33,7 +33,7 @@ from src.preprocess import load_image_to_tensor
 CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
-JETSON_IP = "100.104.20.74"
+JETSON_IP = "47.102.216.39"
 JETSON_PORT = "5000"
 
 # 【关键点】作为前端网页和后台线程通信的桥梁
@@ -478,3 +478,4 @@ elif main_task == "害虫精确分类":
 elif main_task == "历史数据管理":
 
     run_history_mode()
+
