@@ -471,12 +471,26 @@ def run_classification_mode():
 
 
 # ==========================================================
+# ==========================================================
 # 模式三：历史数据洞察 
 # ==========================================================
 def run_history_mode():
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
 
     log_file = os.path.join(save_dir, "auto_curve_history.json")
+    
+    # 🌟 新增：一键清空记录功能
+    col_title, col_btn = st.columns([8, 2])
+    with col_btn:
+        if st.button("🗑️ 清空所有历史记录", type="primary", use_container_width=True):
+            if os.path.exists(log_file):
+                os.remove(log_file) # 删除底层文件
+                st.success("✅ 历史记录已彻底清空！")
+                time.sleep(1) # 停顿1秒让用户看到提示
+                st.rerun()    # 刷新页面状态
+            else:
+                st.warning("⚠️ 当前没有可清理的记录。")
+
     if os.path.exists(log_file):
         records = []
         with open(log_file, "r", encoding="utf-8") as f:
@@ -488,14 +502,12 @@ def run_history_mode():
             st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
             options = [r["timestamp"] for r in reversed(records)]
             
-            # ✅ 修改了下拉框提示文案
             selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (有连接流时，系统逢偶数分钟自动记录):", options)
 
             for r in records:
                 if r["timestamp"] == selected_time:
                     df = pd.DataFrame(r["data"])
                     
-                    # ✅ 修改了标题文案
                     st.markdown(f"#### 📊 {selected_time} 前 2 分钟目标数量走势")
                     
                     chart = alt.Chart(df).mark_line(point=True).encode(
@@ -522,3 +534,4 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
+
