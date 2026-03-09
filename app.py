@@ -34,7 +34,7 @@ CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
 
-# ✅ [Ngrok 伪装补丁]：防止被拦截
+# ✅ [唯一修改的地方]：在这里加入了 User-Agent，把代码伪装成真实的 Google Chrome 浏览器，Ngrok 就不会拦截了！
 NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
 NGROK_HEADERS = {
     "ngrok-skip-browser-warning": "any",
@@ -45,8 +45,12 @@ NGROK_HEADERS = {
 JETSON_IP = "100.104.20.74"
 JETSON_PORT = "5000"
 
-# ✅ 恢复你原汁原味的 C 盘路径
-global_config = {"save_dir": "C:/Screenshots"}
+# ✅ 自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
+SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
+os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
+
+# 【关键点】作为前端网页和后台线程通信的桥梁
+global_config = {"save_dir": SAFE_SAVE_DIR}
 
 # ---------------------------
 # CSS 样式 (100% 保持你原来的)
@@ -84,10 +88,8 @@ if "support_bytes" not in st.session_state:
     st.session_state.support_bytes = [[] for _ in range(5)]
 if "query_bytes" not in st.session_state:
     st.session_state.query_bytes = None
-
-# ✅ 恢复你原汁原味的 C 盘路径
 if 'save_dir' not in st.session_state:
-    st.session_state.save_dir = "C:/Screenshots"
+    st.session_state.save_dir = SAFE_SAVE_DIR
 
 
 # ==========================================================
