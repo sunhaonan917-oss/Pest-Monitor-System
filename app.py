@@ -40,16 +40,12 @@ CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
 
-# ✅ Ngrok 网址与防拦截配置
+# ✅ Ngrok 网址配置 (云端部署必须用这个代替内网 IP)
 NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
 NGROK_HEADERS = {
     "ngrok-skip-browser-warning": "any",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
-
-# 原变量保留不动，但在下方拼接时弃用，避免生成错乱URL
-JETSON_IP = "100.104.20.74"
-JETSON_PORT = "5000"
 
 # 自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
 SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
@@ -59,7 +55,7 @@ os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
 global_config = {"save_dir": SAFE_SAVE_DIR}
 
 # ---------------------------
-# CSS 样式 
+# CSS 样式 (整合了你超大字体的暴力破解法)
 # ---------------------------
 st.markdown("""
     <style>
@@ -68,18 +64,17 @@ st.markdown("""
     .app-title p { margin: 6px 0 0 0; color: rgba(0,0,0,0.6); }
     .card { padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.06); background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.04); margin-bottom: 12px; }
 
-    label[data-baseweb="radio"] {
-        align-items: center !important; 
-        margin-bottom: 16px !important; 
-    }
-
+    /* 👇 终极暴力破解法：全面覆盖侧边栏单选按钮的底层标签 */
     section[data-testid="stSidebar"] .stRadio p,
     div[role="radiogroup"] p,
     .stRadio label p {
         font-size: 20px !important;  
         font-weight: 600 !important; 
-        line-height: normal !important; 
-        margin-top: 2px !important;     
+        line-height: 2 !important;   
+    }
+
+    .stRadio label[data-baseweb="radio"] {
+        margin-bottom: 10px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -98,23 +93,20 @@ if 'save_dir' not in st.session_state:
 
 
 # ==========================================================
-# 后台隐形守护线程：每分钟自动保存过去20秒的曲线
+# 后台隐形守护线程：完美抓取整分前后 10 秒曲线
 # ==========================================================
 def auto_curve_logger():
     count_url = f"{NGROK_URL}/get_count"
     buffer_20s = []
     last_save_minute = -1
-
-    # ✅ 构造北京时区对象 (UTC+8)
     BJ_TZ = timezone(timedelta(hours=8))
 
     while True:
         current_save_dir = global_config["save_dir"]
 
         try:
-            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
-            
-            # ✅ 【修复时区问题】：强制使用设定好的北京时区获取当前时间
+            # ✅ 吸收你的经验：缩短 timeout 到 2 秒，防止线程假死错过触发时间
+            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=2)
             current_time = datetime.now(BJ_TZ)
 
             if res.status_code == 200:
@@ -122,18 +114,17 @@ def auto_curve_logger():
                 now_str = current_time.strftime("%H:%M:%S")
                 buffer_20s.append({"时间": now_str, "检出数量": count})
 
-                # ✅ 为了拿到“前10秒 + 中心0秒 + 后10秒”，我们需要保留 21 个数据点
+                # 保持列表里有最近的 21 条数据（包含前10秒，当前秒，后10秒）
                 if len(buffer_20s) > 21:
                     buffer_20s.pop(0)
 
-            # ✅ 【核心逻辑修正：精准抓取整分前后 10 秒】
-            # 策略：不急于在 0 秒时保存，而是等时间走到 10 秒的时候再保存。
-            # 这样此时 buffer_20s 里存的正好是：前一分钟的50秒 ~ 这一分钟的10秒（完美的前后10秒）
-            if 10 <= current_time.second <= 14 and current_time.minute != last_save_minute and len(buffer_20s) >= 20:
+            # ✅ 核心修复：放宽条件 (len > 0)，不再苛求绝对的 20 条，避免掉帧导致不保存
+            # 触发条件：跑到第 10~12 秒区间触发，完美抓取前一分钟的 [50秒~10秒] 数据
+            if 10 <= current_time.second <= 12 and current_time.minute != last_save_minute and len(buffer_20s) > 0:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
-                # 把记录的时间戳“强行”修正为这分钟的 00 秒（代表这个时段的中心时刻）
+                # 将记录的时间戳“强行”修正为这分钟的 00 秒
                 center_time = current_time.replace(second=0, microsecond=0)
                 record = {
                     "timestamp": center_time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -142,12 +133,12 @@ def auto_curve_logger():
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                last_save_minute = current_time.minute  
+                last_save_minute = current_time.minute
 
         except Exception as e:
-            pass  
+            pass
 
-        time.sleep(1)  
+        time.sleep(1)
 
 
 if 'logger_thread_started' not in st.session_state:
@@ -478,7 +469,7 @@ def run_classification_mode():
 
 
 # ==========================================================
-# 模式三：历史数据洞察 
+# 模式三：历史数据洞察
 # ==========================================================
 def run_history_mode():
     st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
@@ -495,14 +486,13 @@ def run_history_mode():
             st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
             # 倒序排列，让最新的记录在最上面
             options = [r["timestamp"] for r in reversed(records)]
-            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分记录其前后10秒数据):", options)
+            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统会在整分后第10秒自动保存):", options)
 
             # 重绘图表
             for r in records:
                 if r["timestamp"] == selected_time:
                     df = pd.DataFrame(r["data"])
                     df.set_index("时间", inplace=True)
-                    # ✅ 文案修正为前后10秒
                     st.markdown(f"#### 📊 {selected_time} 前后 10 秒目标数量走势")
                     # 极其美观的 Streamlit 原生折线图
                     st.line_chart(df, height=350, use_container_width=True)
