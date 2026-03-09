@@ -114,7 +114,10 @@ def auto_curve_logger():
                     buffer_20s.pop(0)
 
             current_time = datetime.now()
-            if current_time.second == 0 and current_time.minute != last_save_minute and len(buffer_20s) > 0:
+            
+            # ✅ [修复核心 Bug]：去掉苛刻的 current_time.second == 0 限制。
+            # 只要发现现在是新的一分钟，就立马保存数据，绝对不再错过保存时机！
+            if current_time.minute != last_save_minute and len(buffer_20s) > 0:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
