@@ -34,23 +34,15 @@ CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
 
-# ✅ [修改1]：直接定义最新的 Ngrok 网址，并加入防拦截头部
-NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
-NGROK_HEADERS = {"ngrok-skip-browser-warning": "any"}
+# ✅ 修改：填入 Ngrok 网址
+JETSON_IP = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
+JETSON_PORT = ""
 
-# 原变量保留不动，但在下方拼接时弃用，避免生成错乱URL
-JETSON_IP = "100.104.20.74"
-JETSON_PORT = "5000"
-
-# ✅ [修改2]：自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
-SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
-os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
-
-# 【关键点】作为前端网页和后台线程通信的桥梁
-global_config = {"save_dir": SAFE_SAVE_DIR}
+# ✅ 修改：把 C盘 改成当前目录下的文件夹，彻底解决权限报错
+global_config = {"save_dir": "./Screenshots"}
 
 # ---------------------------
-# CSS 样式 (100% 保持你原来的)
+# CSS 样式
 # ---------------------------
 st.markdown("""
     <style>
@@ -86,52 +78,59 @@ if "support_bytes" not in st.session_state:
 if "query_bytes" not in st.session_state:
     st.session_state.query_bytes = None
 if 'save_dir' not in st.session_state:
-    st.session_state.save_dir = SAFE_SAVE_DIR
+    st.session_state.save_dir = "./Screenshots" # ✅ 修改：C盘改相对路径
 
 
 # ==========================================================
 # 后台隐形守护线程：每分钟自动保存过去20秒的曲线
 # ==========================================================
 def auto_curve_logger():
-    # ✅ [修改3]：修正原代码中 http://IP:PORT/ 的错乱拼接
-    count_url = f"{NGROK_URL}/get_count"
+    # ✅ 修改：删除了 http:// 和 :端口 的拼接，防止变成 http://https://...
+    count_url = f"{JETSON_IP}/get_count"
     buffer_20s = []
     last_save_minute = -1
 
     while True:
+        # 从全局字典获取最新的保存路径
         current_save_dir = global_config["save_dir"]
 
         try:
-            # ✅ [修改4]：加入 headers 跳过拦截
-            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
+            # ✅ 修改：加入防拦截 Header
+            res = requests.get(count_url, headers={"ngrok-skip-browser-warning": "any"}, timeout=2)
             if res.status_code == 200:
                 count = res.json().get("count", 0)
                 now_str = datetime.now().strftime("%H:%M:%S")
+                # 记录时间戳和数量
                 buffer_20s.append({"时间": now_str, "检出数量": count})
 
+                # 保持列表里永远只有最近的 20 条数据
                 if len(buffer_20s) > 20:
                     buffer_20s.pop(0)
 
             current_time = datetime.now()
+            # 触发条件：当前秒数为 00（整分），且这一分钟还没保存过，且缓存里有数据
             if current_time.second == 0 and current_time.minute != last_save_minute and len(buffer_20s) > 0:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
+                # 打包记录
                 record = {
                     "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
                     "data": buffer_20s.copy()
                 }
+                # 追加写入 JSON 文件
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                last_save_minute = current_time.minute  
+                last_save_minute = current_time.minute  # 标记这一分钟已经存过
 
         except Exception as e:
-            pass  
+            pass  # 如果 Jetson 关机了，后台线程保持静默，不报错干扰系统
 
-        time.sleep(1)  
+        time.sleep(1)  # 每秒拉取一次
 
 
+# 确保线程只在网页第一次加载时启动一次
 if 'logger_thread_started' not in st.session_state:
     t = threading.Thread(target=auto_curve_logger, daemon=True)
     t.start()
@@ -158,27 +157,32 @@ def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
 # ---------------------------
 # Sidebar 侧边栏
 # ---------------------------
+# 替换为虫子图标 🐛
 st.sidebar.markdown('## 🐛 草地贪夜蛾监测平台')
 
+# 菜单中加入“平台首页”，并作为默认启动页
 main_task = st.sidebar.radio(
     "选择功能模式：",
     ["平台首页", "害虫检测计数", "害虫精确分类", "历史数据管理"],
     index=0
 )
 
+# 截图保存路径配置
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 历史数据与存储配置")
 st.session_state.save_dir = st.sidebar.text_input("截图与数据保存目录", value=st.session_state.save_dir)
 
+# 实时更新全局字典，供后台线程读取
 global_config["save_dir"] = st.session_state.save_dir
 save_dir = st.session_state.save_dir
 
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
 
 # ==========================================================
-# 模式零：平台首页
+# 模式零：平台首页 (全新设计的居中介绍页)
 # ==========================================================
 def run_home_mode():
+    # 使用 HTML 和 CSS 实现完美的垂直居中与优雅排版
     st.markdown("""
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 75vh; text-align: center;">
             <h1 style="font-size: 42px; color: #2c3e50; margin-bottom: 20px;">🐛 欢迎使用草地贪夜蛾智能监测平台</h1>
@@ -200,16 +204,16 @@ def run_home_mode():
 
 
 # ==========================================================
-# 模式一：实时目标检测
+# 模式一：实时目标检测 (专业 UI 包装 + 左右分栏版)
 # ==========================================================
 def run_detection_mode():
     st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
                 unsafe_allow_html=True)
 
-    # ✅ [修改5]：修正原代码拼接错误
-    stream_url = f"{NGROK_URL}/video_feed"
-    snapshot_url = f"{NGROK_URL}/snapshot"
-    count_url = f"{NGROK_URL}/get_count"
+    # ✅ 修改：删除了 http:// 和 :端口 的拼接
+    stream_url = f"{JETSON_IP}/video_feed"
+    snapshot_url = f"{JETSON_IP}/snapshot"
+    count_url = f"{JETSON_IP}/get_count"
 
     st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 20px;">
@@ -223,7 +227,6 @@ def run_detection_mode():
 
     with col_left:
         st.markdown("#### 📡 实时监控视窗")
-        # ✅ [必改点]：原本的 <img> 标签无法带防拦截 header，必须换成 fetch，否则浏览器里全是黑屏警告
         video_html = f"""
         <!DOCTYPE html>
         <html>
@@ -238,14 +241,7 @@ def run_detection_mode():
             <script>
                 var liveStream = document.getElementById('live_stream');
                 setInterval(() => {{
-                    fetch("{snapshot_url}?t=" + new Date().getTime(), {{
-                        headers: {{ "ngrok-skip-browser-warning": "any" }}
-                    }})
-                    .then(response => response.blob())
-                    .then(blob => {{
-                        liveStream.src = URL.createObjectURL(blob);
-                    }})
-                    .catch(err => console.log('等待边缘端响应...'));
+                    liveStream.src = "{snapshot_url}?t=" + new Date().getTime();
                 }}, 150); 
             </script>
         </body>
@@ -263,8 +259,8 @@ def run_detection_mode():
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             file_path = os.path.join(save_dir, f"pest_det_{timestamp}.jpg")
             try:
-                # ✅ [修改6]：加入 headers 防拦截
-                response = requests.get(snapshot_url, headers=NGROK_HEADERS, timeout=5)
+                # ✅ 修改：加入防拦截 Header
+                response = requests.get(snapshot_url, headers={"ngrok-skip-browser-warning": "any"}, timeout=5)
                 if response.status_code == 200:
                     with open(file_path, "wb") as f:
                         f.write(response.content)
@@ -279,8 +275,8 @@ def run_detection_mode():
                 os.makedirs(save_dir, exist_ok=True)
             txt_path = os.path.join(save_dir, "pest_count_log.txt")
             try:
-                # ✅ [修改7]：加入 headers 防拦截
-                res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
+                # ✅ 修改：加入防拦截 Header
+                res = requests.get(count_url, headers={"ngrok-skip-browser-warning": "any"}, timeout=5)
                 if res.status_code == 200:
                     count = res.json().get("count", 0)
                     timestamp_txt = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -332,7 +328,7 @@ def run_detection_mode():
                 }});
 
                 setInterval(() => {{
-                    // ✅ [修改8]：在 JS fetch 中加入 headers 防拦截
+                    // ✅ 修改：在 JS fetch 中加入 headers
                     fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
                         .then(response => response.json())
                         .then(data => {{
