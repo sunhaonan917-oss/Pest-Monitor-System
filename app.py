@@ -254,103 +254,75 @@ def run_detection_mode():
 
     with col_right:
         st.markdown("#### 📸 监控控制台")
+        st.info("💡 提示：文件将直接通过浏览器下载到您的【下载】文件夹中，彻底告别报错。")
 
-        # 1. 原有的：保存带有检测框的画面
-        if st.button("🖼️ 一键保存当前画面"):
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir, exist_ok=True)
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            file_path = os.path.join(save_dir, f"pest_det_{timestamp}.jpg")
-            try:
-                response = requests.get(snapshot_url, headers=NGROK_HEADERS, timeout=5)
-                if response.status_code == 200:
-                    with open(file_path, "wb") as f:
-                        f.write(response.content)
-                    st.success(f"✅ 已保存: {file_path}")
-                else:
-                    st.error(f"服务器拒绝请求: 状态码 {response.status_code}")
-            except Exception as e:
-                st.error("截屏出错, 请检查网络。")
-
-
-        # 3. 原有的：记录数量
-        if st.button("📝 记录当前数量到 TXT"):
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir, exist_ok=True)
-            txt_path = os.path.join(save_dir, "pest_count_log.txt")
-            try:
-                res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
-                if res.status_code == 200:
-                    count = res.json().get("count", 0)
-                    timestamp_txt = time.strftime("%Y-%m-%d %H:%M:%S")
-                    with open(txt_path, "a", encoding="utf-8") as f:
-                        f.write(f"[{timestamp_txt}] 发现草地贪夜蛾目标数量: {count} 只\n")
-                    st.success("✅ 日志已追加")
-            except Exception as e:
-                st.error("网络请求失败。")
-
-        st.markdown("---")
-        st.markdown("#### 📈 实时目标计数")
-
-        chart_html = f"""
+        # 使用纯前端 HTML/JS 模拟“右键另存为”的动作
+        download_buttons_html = f"""
         <!DOCTYPE html>
         <html>
         <head>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
             <style>
-                body {{ margin: 0; padding: 0; background-color: transparent; }}
-                .chart-container {{ background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; height: 280px; width: 100%; box-sizing: border-box; }}
+                .btn {{
+                    display: inline-flex; align-items: center; justify-content: center;
+                    width: 100%; padding: 0.5rem 1rem; margin-bottom: 15px;
+                    background-color: white; border: 1px solid rgba(49, 51, 63, 0.2);
+                    border-radius: 0.5rem; color: rgb(49, 51, 63);
+                    font-size: 1rem; font-weight: 400; cursor: pointer;
+                    text-decoration: none; font-family: "Source Sans Pro", sans-serif;
+                    transition: all 0.2s ease;
+                }}
+                .btn:hover {{ border-color: rgb(255, 75, 75); color: rgb(255, 75, 75); }}
             </style>
         </head>
         <body>
-            <div class="chart-container">
-                <canvas id="pestChart"></canvas>
-            </div>
-            <script>
-                var ctx = document.getElementById('pestChart').getContext('2d');
-                var pestChart = new Chart(ctx, {{
-                    type: 'line',
-                    data: {{
-                        labels: [],
-                        datasets: [{{
-                            label: '检出数量',
-                            data: [],
-                            borderColor: '#FF4B4B',
-                            backgroundColor: 'rgba(255, 75, 75, 0.1)',
-                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2
-                        }}]
-                    }},
-                    options: {{ 
-                        maintainAspectRatio: false, 
-                        animation: false,
-                        scales: {{ 
-                            y: {{ beginAtZero: true, suggestedMax: 5, ticks: {{ stepSize: 1 }} }},
-                            x: {{ display: true }}
-                        }} 
-                    }}
-                }});
+            <button class="btn" onclick="saveImage()">🖼️ 一键下载当前画面</button>
+            <button class="btn" onclick="saveTxt()">📝 下载当前数量到 TXT</button>
 
-                setInterval(() => {{
-                    fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
-                        .then(response => response.json())
-                        .then(data => {{
-                            var now = new Date();
-                            var timeStr = now.getSeconds() + 's';
-                            if(pestChart.data.labels.length > 30) {{
-                                pestChart.data.labels.shift();
-                                pestChart.data.datasets[0].data.shift();
-                            }}
-                            pestChart.data.labels.push(timeStr);
-                            pestChart.data.datasets[0].data.push(data.count);
-                            pestChart.update();
-                        }})
-                        .catch(err => console.log('等待边缘端响应...'));
-                }}, 1000);
+            <script>
+                // 模拟右键保存图片
+                async function saveImage() {{
+                    try {{
+                        const res = await fetch("{snapshot_url}?t=" + Date.now(), {{
+                            headers: {{ "ngrok-skip-browser-warning": "any" }}
+                        }});
+                        const blob = await res.blob();
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        // 自动生成带时间戳的文件名
+                        const timeStr = new Date().toISOString().replace(/[:.-]/g, '').slice(0, 15);
+                        a.download = 'pest_det_' + timeStr + '.jpg';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }} catch(e) {{ alert("下载失败，请确认视频流是否正常。"); }}
+                }}
+
+                // 模拟生成并保存 TXT 文件
+                async function saveTxt() {{
+                    try {{
+                        const res = await fetch("{count_url}", {{
+                            headers: {{ "ngrok-skip-browser-warning": "any" }}
+                        }});
+                        const data = await res.json();
+                        const timeStr = new Date().toLocaleString('zh-CN');
+                        const text = "[" + timeStr + "] 发现草地贪夜蛾目标数量: " + data.count + " 只\\n";
+                        
+                        const blob = new Blob([text], {{ type: 'text/plain;charset=utf-8' }});
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        const fileTime = new Date().toISOString().replace(/[:.-]/g, '').slice(0, 15);
+                        a.download = 'pest_count_' + fileTime + '.txt';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }} catch(e) {{ alert("下载计数失败。"); }}
+                }}
             </script>
         </body>
         </html>
         """
-        components.html(chart_html, height=350)
+        # 将 HTML 按钮嵌入网页
+        components.html(download_buttons_html, height=180)
 
 
 # ==========================================================
@@ -483,3 +455,4 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
+
