@@ -34,24 +34,18 @@ CKPT_PATH = "checkpoints/199.tar"
 BACKBONE_NAME = "ResNet10_EMA"
 USE_GPU = True
 
-# ✅ 修改：这里填入你最新的 Ngrok 网址
-JETSON_IP = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
-JETSON_PORT = "" # Ngrok 不需要端口
+# ✅ [微调 1/3] 网址替换：改为你的 Ngrok 网址，并加入跳过警告的 Header
+NGROK_URL = "https://unneighbourly-janita-hypothecary.ngrok-free.dev"
+NGROK_HEADERS = {"ngrok-skip-browser-warning": "any"}
 
-# ✅ 破解 Ngrok 拦截的关键暗号
-NGROK_HEADERS = {"ngrok-skip-browser-warning": "69420"}
+# ✅ [微调 2/3] 路径兼容：如果是 Windows 就用 C 盘，如果是云端 Linux 就用相对目录
+DEFAULT_SAVE_DIR = "C:/Screenshots" if os.name == 'nt' else "pest_records"
 
 # 【关键点】作为前端网页和后台线程通信的桥梁
-# ✅ 路径自动兼容补丁
-if not os.path.exists("C:/"):
-    DEFAULT_SAVE_DIR = "pest_records"
-else:
-    DEFAULT_SAVE_DIR = "C:/Screenshots"
-
 global_config = {"save_dir": DEFAULT_SAVE_DIR}
 
 # ---------------------------
-# CSS 样式 (保持原样)
+# CSS 样式 (100% 保持原样)
 # ---------------------------
 st.markdown("""
     <style>
@@ -59,13 +53,26 @@ st.markdown("""
     .app-title h1 { margin: 0; font-size: 24px; }
     .app-title p { margin: 6px 0 0 0; color: rgba(0,0,0,0.6); }
     .card { padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.06); background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.04); margin-bottom: 12px; }
-    label[data-baseweb="radio"] { align-items: center !important; margin-bottom: 16px !important; }
-    section[data-testid="stSidebar"] .stRadio p { font-size: 20px !important; font-weight: 600 !important; }
+
+    /* 👇 修复侧边栏单选按钮垂直不对齐的问题 */
+    label[data-baseweb="radio"] {
+        align-items: center !important; /* 强制红点和文字垂直居中对齐 */
+        margin-bottom: 16px !important; /* 用外边距拉开选项之间的距离，不再挤在一起 */
+    }
+
+    section[data-testid="stSidebar"] .stRadio p,
+    div[role="radiogroup"] p,
+    .stRadio label p {
+        font-size: 20px !important;  
+        font-weight: 600 !important; 
+        line-height: normal !important; /* 恢复正常行高，防止文字隐形框变形 */
+        margin-top: 2px !important;     /* 微调文字重心，使其与红点绝对水平 */
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # ---------------------------
-# Session 状态初始化
+# Session 状态初始化 (100% 保持原样)
 # ---------------------------
 if "class_names" not in st.session_state:
     st.session_state.class_names = ["SFegg", "SFfourth", "SFfifth", "SFsixth", "SFadult"]
@@ -78,37 +85,54 @@ if 'save_dir' not in st.session_state:
 
 
 # ==========================================================
-# 后台隐形守护线程：每分钟自动保存过去20秒的曲线 (✅ 加入 Header)
+# 后台隐形守护线程：每分钟自动保存过去20秒的曲线
 # ==========================================================
 def auto_curve_logger():
-    count_url = f"{JETSON_IP}/get_count"
+    count_url = f"{NGROK_URL}/get_count"
     buffer_20s = []
     last_save_minute = -1
 
     while True:
+        # 从全局字典获取最新的保存路径
         current_save_dir = global_config["save_dir"]
+
         try:
-            # ✅ 加入 NGROK_HEADERS 以跳过拦截
-            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
+            # ✅ [微调 3/3] 加入 headers 破解 Ngrok 拦截，保证计数器工作
+            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=2)
             if res.status_code == 200:
                 count = res.json().get("count", 0)
                 now_str = datetime.now().strftime("%H:%M:%S")
+                # 记录时间戳和数量
                 buffer_20s.append({"时间": now_str, "检出数量": count})
+
+                # 保持列表里永远只有最近的 20 条数据
                 if len(buffer_20s) > 20:
                     buffer_20s.pop(0)
 
             current_time = datetime.now()
+            # 触发条件：当前秒数为 00（整分），且这一分钟还没保存过，且缓存里有数据
             if current_time.second == 0 and current_time.minute != last_save_minute and len(buffer_20s) > 0:
                 os.makedirs(current_save_dir, exist_ok=True)
                 log_file = os.path.join(current_save_dir, "auto_curve_history.json")
-                record = {"timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"), "data": buffer_20s.copy()}
+
+                # 打包记录
+                record = {
+                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "data": buffer_20s.copy()
+                }
+                # 追加写入 JSON 文件
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                last_save_minute = current_time.minute
-        except Exception:
-            pass
-        time.sleep(1)
 
+                last_save_minute = current_time.minute  # 标记这一分钟已经存过
+
+        except Exception as e:
+            pass  # 如果 Jetson 关机了，后台线程保持静默，不报错干扰系统
+
+        time.sleep(1)  # 每秒拉取一次
+
+
+# 确保线程只在网页第一次加载时启动一次
 if 'logger_thread_started' not in st.session_state:
     t = threading.Thread(target=auto_curve_logger, daemon=True)
     t.start()
@@ -116,10 +140,13 @@ if 'logger_thread_started' not in st.session_state:
 
 
 # ---------------------------
-# 工具函数 (保持原样)
+# 工具函数 (100% 保持原样)
 # ---------------------------
 def bytes_to_filelike(b: bytes): return io.BytesIO(b)
+
+
 def bytes_to_pil(b: bytes): return Image.open(io.BytesIO(b)).convert("RGB")
+
 
 @st.cache(allow_output_mutation=True)
 def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
@@ -130,55 +157,101 @@ def load_model_cached(ckpt_path: str, device_str: str, backbone_name: str):
 
 
 # ---------------------------
-# Sidebar 侧边栏
+# Sidebar 侧边栏 (100% 保持原样)
 # ---------------------------
+# 替换为虫子图标 🐛
 st.sidebar.markdown('## 🐛 草地贪夜蛾监测平台')
-main_task = st.sidebar.radio("选择功能模式：", ["平台首页", "害虫检测计数", "害虫精确分类", "历史数据管理"], index=1)
+
+# 菜单中加入“平台首页”，并作为默认启动页
+main_task = st.sidebar.radio(
+    "选择功能模式：",
+    ["平台首页", "害虫检测计数", "害虫精确分类", "历史数据管理"],
+    index=0
+)
+
+# 截图保存路径配置
 st.sidebar.markdown("---")
+st.sidebar.markdown("### 📊 历史数据与存储配置")
 st.session_state.save_dir = st.sidebar.text_input("截图与数据保存目录", value=st.session_state.save_dir)
+
+# 实时更新全局字典，供后台线程读取
 global_config["save_dir"] = st.session_state.save_dir
 save_dir = st.session_state.save_dir
+
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
 
 # ==========================================================
-# 模式零：平台首页
+# 模式零：平台首页 (100% 保持原样)
 # ==========================================================
 def run_home_mode():
-    st.markdown("""<div style="text-align: center;"><h1>🐛 欢迎使用智能监测平台</h1></div>""", unsafe_allow_html=True)
+    # 使用 HTML 和 CSS 实现完美的垂直居中与优雅排版
+    st.markdown("""
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 75vh; text-align: center;">
+            <h1 style="font-size: 42px; color: #2c3e50; margin-bottom: 20px;">🐛 欢迎使用草地贪夜蛾智能监测平台</h1>
+            <div style="background-color: #f8f9fa; padding: 40px; border-radius: 15px; border: 1px solid #e0e0e0; max-width: 800px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                <p style="font-size: 18px; color: #555; line-height: 1.8; margin-bottom: 20px;">
+                    本平台基于<b>端边协同架构</b>开发，致力于为非结构化农田环境提供高效、精准的病虫害监测解决方案。系统深度集成了面向复杂场景的深度学习核心算法：
+                </p>
+                <ul style="text-align: left; font-size: 16px; color: #444; line-height: 1.8; margin-bottom: 30px; display: inline-block;">
+                    <li>📡 <b>DPC-DINO 目标检测：</b> 部署于边缘节点，实现实时视频流监控与目标捕获。</li>
+                    <li>🔬 <b>EIR-CDFS 精确分类：</b> 部署于中心网页端，完成高精度的小样本害虫特征识别。</li>
+                    <li>📊 <b>自动化数据归档：</b> 隐形守护线程周期性收割检测数据，构建历史趋势溯源体系。</li>
+                </ul>
+                <p style="font-size: 18px; font-weight: bold; color: #007bff;">
+                    👈 请在左侧菜单栏选择您需要的功能模块开始体验
+                </p>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 
 # ==========================================================
-# 模式一：实时目标检测 (✅ 功能全复原 + 暴力破解补丁)
+# 模式一：实时目标检测 (100% 保留你的界面，仅替换底层请求方式)
 # ==========================================================
 def run_detection_mode():
-    st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1></div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
+                unsafe_allow_html=True)
 
-    snapshot_url = f"{JETSON_IP}/snapshot"
-    count_url = f"{JETSON_IP}/get_count"
+    stream_url = f"{NGROK_URL}/video_feed"
+    snapshot_url = f"{NGROK_URL}/snapshot"
+    count_url = f"{NGROK_URL}/get_count"
+
+    st.markdown(f"""
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 20px;">
+            <h4 style="margin-top: 0; color: #333;">📡 边缘节点流媒体初始化</h4>
+            <p style="color: #555; font-size: 14px;">系统检测到边缘端处于待机休眠状态。请 <b><a href="{stream_url}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: bold;">[ 点击此处激活 Jetson 硬件通道 ]</a></b>。<br>
+            <span style="font-size: 13px; color: #888;">* 激活后请保留该安全通道页，返回本监控中心即可接入无损实时流。</span></p>
+        </div>
+    """, unsafe_allow_html=True)
 
     col_left, col_right = st.columns([7, 3])
 
     with col_left:
         st.markdown("#### 📡 实时监控视窗")
-        # ✅ 使用 JS Fetch 加入 Header，彻底解决刷新才更新 1 帧的问题
+        # ✅ 使用 Fetch 携带 Header 获取视频流，彻底解决黑屏问题
         video_html = f"""
         <!DOCTYPE html>
         <html>
-        <head><style>img {{ width: 100%; border-radius: 8px; min-height: 520px; object-fit: contain; background: #111; }}</style></head>
+        <head>
+            <style>
+                body {{ margin: 0; padding: 0; background-color: transparent; display: flex; justify-content: center; }}
+                img {{ width: 100%; border-radius: 8px; border: 3px solid #e8f4ff; background-color: #111; min-height: 520px; object-fit: contain; }}
+            </style>
+        </head>
         <body>
-            <img id="live_stream" alt="正在连接...">
+            <img id="live_stream" alt="正在建立安全连接，拉取实时视频流...">
             <script>
-                const liveStream = document.getElementById('live_stream');
-                async function updateFrame() {{
-                    try {{
-                        const r = await fetch("{snapshot_url}?t=" + Date.now(), {{
-                            headers: {{ "ngrok-skip-browser-warning": "any" }}
-                        }});
-                        const blob = await r.blob();
+                var liveStream = document.getElementById('live_stream');
+                setInterval(() => {{
+                    fetch("{snapshot_url}?t=" + new Date().getTime(), {{
+                        headers: {{ "ngrok-skip-browser-warning": "any" }}
+                    }})
+                    .then(response => response.blob())
+                    .then(blob => {{
                         liveStream.src = URL.createObjectURL(blob);
-                    }} catch (e) {{ }}
-                }}
-                setInterval(updateFrame, 150);
+                    }})
+                    .catch(err => console.log('等待边缘端响应...'));
+                }}, 150); 
             </script>
         </body>
         </html>
@@ -188,67 +261,232 @@ def run_detection_mode():
     with col_right:
         st.markdown("#### 📸 监控控制台")
 
-        # 1. 🖼️ 一键保存逻辑 (原汁原味复原)
+        # 1. 原有的：保存带有检测框的画面
         if st.button("🖼️ 一键保存当前画面"):
-            if not os.path.exists(save_dir): os.makedirs(save_dir, exist_ok=True)
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             file_path = os.path.join(save_dir, f"pest_det_{timestamp}.jpg")
             try:
-                # ✅ 加入 Header 解决“截屏出错”
-                response = requests.get(snapshot_url, headers=NGROK_HEADERS, timeout=10)
+                # ✅ 破解拦截
+                response = requests.get(snapshot_url, headers=NGROK_HEADERS, timeout=5)
                 if response.status_code == 200:
-                    with open(file_path, "wb") as f: f.write(response.content)
+                    with open(file_path, "wb") as f:
+                        f.write(response.content)
                     st.success(f"✅ 已保存: {file_path}")
-            except: st.error("截屏出错, 请检查网络。")
+            except Exception as e:
+                st.error("截屏出错, 请检查网络。")
 
-        # 3. 📝 记录数量逻辑 (原汁原味复原)
+
+        # 3. 原有的：记录数量
         if st.button("📝 记录当前数量到 TXT"):
-            if not os.path.exists(save_dir): os.makedirs(save_dir, exist_ok=True)
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
             txt_path = os.path.join(save_dir, "pest_count_log.txt")
             try:
-                # ✅ 加入 Header 解决网络请求失败
+                # ✅ 破解拦截
                 res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
                 if res.status_code == 200:
                     count = res.json().get("count", 0)
+                    timestamp_txt = time.strftime("%Y-%m-%d %H:%M:%S")
                     with open(txt_path, "a", encoding="utf-8") as f:
-                        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 数量: {count} 只\n")
+                        f.write(f"[{timestamp_txt}] 发现草地贪夜蛾目标数量: {count} 只\n")
                     st.success("✅ 日志已追加")
-            except: st.error("网络请求失败。")
+            except Exception as e:
+                st.error("网络请求失败。")
 
         st.markdown("---")
         st.markdown("#### 📈 实时目标计数")
-        # ✅ 修复 Chart.js 的大括号转义语法死穴
+
         chart_html = f"""
-        <canvas id="pestChart" style="background: white; border: 1px solid #ddd; height: 280px;"></canvas>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <script>
-            var ctx = document.getElementById('pestChart').getContext('2d');
-            var pestChart = new Chart(ctx, {{
-                type: 'line',
-                data: {{ labels: [], datasets: [{{ label: '检出数量', data: [], borderColor: '#FF4B4B', tension: 0.3 }}] }},
-                options: {{ maintainAspectRatio: false, animation: false }}
-            }});
-            setInterval(() => {{
-                fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
-                    .then(r => r.json())
-                    .then(data => {{
-                        if(pestChart.data.labels.length > 20) {{ pestChart.data.labels.shift(); pestChart.data.datasets[0].data.shift(); }}
-                        pestChart.data.labels.push(new Date().getSeconds() + 's');
-                        pestChart.data.datasets[0].data.push(data.count);
-                        pestChart.update();
-                    }});
-            }}, 1000);
-        </script>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            <style>
+                body {{ margin: 0; padding: 0; background-color: transparent; }}
+                .chart-container {{ background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; height: 280px; width: 100%; box-sizing: border-box; }}
+            </style>
+        </head>
+        <body>
+            <div class="chart-container">
+                <canvas id="pestChart"></canvas>
+            </div>
+            <script>
+                var ctx = document.getElementById('pestChart').getContext('2d');
+                var pestChart = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: [],
+                        datasets: [{{
+                            label: '检出数量',
+                            data: [],
+                            borderColor: '#FF4B4B',
+                            backgroundColor: 'rgba(255, 75, 75, 0.1)',
+                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2
+                        }}]
+                    }},
+                    options: {{ 
+                        maintainAspectRatio: false, 
+                        animation: false,
+                        scales: {{ 
+                            y: {{ beginAtZero: true, suggestedMax: 5, ticks: {{ stepSize: 1 }} }},
+                            x: {{ display: true }}
+                        }} 
+                    }}
+                }});
+
+                setInterval(() => {{
+                    // ✅ 加入 JS Header 破解拦截
+                    fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
+                        .then(response => response.json())
+                        .then(data => {{
+                            var now = new Date();
+                            var timeStr = now.getSeconds() + 's';
+                            if(pestChart.data.labels.length > 30) {{
+                                pestChart.data.labels.shift();
+                                pestChart.data.datasets[0].data.shift();
+                            }}
+                            pestChart.data.labels.push(timeStr);
+                            pestChart.data.datasets[0].data.push(data.count);
+                            pestChart.update();
+                        }})
+                        .catch(err => console.log('等待边缘端响应...'));
+                }}, 1000);
+            </script>
+        </body>
+        </html>
         """
         components.html(chart_html, height=350)
 
-# 其他分类与历史模式保留你的原逻辑...
-def run_classification_mode():
-    st.info("分类模块已就绪")
-def run_history_mode():
-    st.info("历史记录正常归档中")
 
-if main_task == "平台首页": run_home_mode()
-elif main_task == "害虫检测计数": run_detection_mode()
-elif main_task == "害虫精确分类": run_classification_mode()
-elif main_task == "历史数据管理": run_history_mode()
+# ==========================================================
+# 模式二：小样本分类逻辑 (100% 保持原样)
+# ==========================================================
+def run_classification_mode():
+    st.markdown('<div class="app-title"><h1>EIR-CDFS害虫分类</h1><p>本地计算资源推理</p></div>', unsafe_allow_html=True)
+
+    st.sidebar.markdown("---")
+    page = st.sidebar.radio("分类操作步骤", ["① 上传支持集", "② 上传需分类图片"])
+
+    if not os.path.exists(CKPT_PATH):
+        st.error(f"找不到权重文件：{CKPT_PATH}")
+        return
+    model = load_model_cached(CKPT_PATH, str(device), BACKBONE_NAME)
+
+    if page == "① 上传支持集":
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("第1步：自定义类别名")
+        for i in range(5):
+            st.session_state.class_names[i] = st.text_input(f"类别 {i}", st.session_state.class_names[i], key=f"cn_{i}")
+
+        st.subheader("第2步：上传参考图 (每类5张)")
+        for i in range(5):
+            with st.expander(f"上传 {st.session_state.class_names[i]}"):
+                files = st.file_uploader("选择图片", type=["png", "jpg"], accept_multiple_files=True, key=f"up_{i}")
+                if files: st.session_state.support_bytes[i] = [f.getvalue() for f in files[:5]]
+                imgs = st.session_state.support_bytes[i]
+                if imgs: st.image([bytes_to_pil(b) for b in imgs], width=120)
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("第3步：上传待识别图片")
+        q = st.file_uploader("上传 query", type=["png", "jpg"], key="qu")
+        if q: st.session_state.query_bytes = q.getvalue()
+        if st.session_state.query_bytes:
+            st.image(bytes_to_pil(st.session_state.query_bytes), caption="待识别图", width=400)
+            if st.button("开始推理"):
+                support_tensors = []
+                support_labels = []
+                for i in range(5):
+                    for b in st.session_state.support_bytes[i]:
+                        support_tensors.append(load_image_to_tensor(bytes_to_filelike(b)))
+                        support_labels.append(i)
+                if len(support_tensors) < 25:
+                    st.error("Support 数据不足：每类必须上传 5 张图片。")
+                else:
+                    with st.spinner("推理中..."):
+                        x_s = torch.stack(support_tensors).to(device)
+                        y_s = torch.tensor(support_labels).to(device)
+                        x_q = load_image_to_tensor(bytes_to_filelike(st.session_state.query_bytes)).unsqueeze(0).to(
+                            device)
+                        logits = predict_5way5shot_one_query(model, x_s, y_s, x_q, device)
+                        res = torch.argmax(logits).item()
+                        st.success(f"识别结果：{st.session_state.class_names[res]}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ==========================================================
+# 模式三：历史数据洞察 (图表重绘与照片画廊) (100% 保持原样)
+# ==========================================================
+def run_history_mode():
+    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测记录与截图归档</p></div>', unsafe_allow_html=True)
+
+    # 将页面分为两个选项卡
+    tab_curve, tab_gallery = st.tabs(["📈 历史检测趋势分析", "🖼️ 本地历史截图展示"])
+
+    # 选项卡 1：自动保存的曲线重绘
+    with tab_curve:
+        log_file = os.path.join(save_dir, "auto_curve_history.json")
+        if os.path.exists(log_file):
+            records = []
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        records.append(json.loads(line))
+
+            if records:
+                st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
+                # 倒序排列，让最新的记录在最上面
+                options = [r["timestamp"] for r in reversed(records)]
+                selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
+
+                # 重绘图表
+                for r in records:
+                    if r["timestamp"] == selected_time:
+                        df = pd.DataFrame(r["data"])
+                        df.set_index("时间", inplace=True)
+                        st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
+                        # 极其美观的 Streamlit 原生折线图
+                        st.line_chart(df, height=350, use_container_width=True)
+                        break
+            else:
+                st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
+        else:
+            st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
+
+    # 选项卡 2：相册画廊
+    with tab_gallery:
+        # 抓取目录下所有的 jpg 和 png 图片
+        images = glob.glob(os.path.join(save_dir, "*.jpg")) + glob.glob(os.path.join(save_dir, "*.png"))
+
+        if images:
+            # 按修改时间从新到旧排序
+            images.sort(key=os.path.getmtime, reverse=True)
+            st.markdown(f"📸 共检索到 **{len(images)}** 张本地截图文件。")
+
+            # 建立三列的自适应照片墙
+            cols = st.columns(3)
+            for idx, img_path in enumerate(images):
+                with cols[idx % 3]:
+                    # 【核心修复】：用 PIL 强行把图片读到内存里，破解浏览器的本地路径拦截
+                    try:
+                        img_data = Image.open(img_path)
+                        st.image(img_data, caption=os.path.basename(img_path))
+                    except Exception as e:
+                        st.error(f"图片加载失败: {e}")
+        else:
+            st.info(f"🚫 目录 {save_dir} 中暂无保存的图像文件，您可以在检测页面点击【一键保存当前画面】。")
+
+
+# ---------------------------
+# 主程序路由
+# ---------------------------
+if main_task == "平台首页":
+    run_home_mode()
+elif main_task == "害虫检测计数":
+    run_detection_mode()
+elif main_task == "害虫精确分类":
+    run_classification_mode()
+elif main_task == "历史数据管理":
+    run_history_mode()
