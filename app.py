@@ -201,16 +201,15 @@ def run_home_mode():
 
 
 # ==========================================================
-# ==========================================================
-# 模式一：实时目标检测 (专业 UI 包装 + 左右分栏版)
+# 模式一：实时目标检测
 # ==========================================================
 def run_detection_mode():
     st.markdown('<div class="app-title"><h1>DPC-DINO 实时监测</h1><p>正在接收来自边缘端 Jetson Orin Nano 的无损实时流</p></div>',
                 unsafe_allow_html=True)
 
-    stream_url = f"http://{JETSON_IP}:{JETSON_PORT}/video_feed"
-    snapshot_url = f"http://{JETSON_IP}:{JETSON_PORT}/snapshot"
-    count_url = f"http://{JETSON_IP}:{JETSON_PORT}/get_count"
+    stream_url = f"{NGROK_URL}/video_feed"
+    snapshot_url = f"{NGROK_URL}/snapshot"
+    count_url = f"{NGROK_URL}/get_count"
 
     st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 20px;">
@@ -238,7 +237,14 @@ def run_detection_mode():
             <script>
                 var liveStream = document.getElementById('live_stream');
                 setInterval(() => {{
-                    liveStream.src = "{snapshot_url}?t=" + new Date().getTime();
+                    fetch("{snapshot_url}?t=" + new Date().getTime(), {{
+                        headers: {{ "ngrok-skip-browser-warning": "any" }}
+                    }})
+                    .then(response => response.blob())
+                    .then(blob => {{
+                        liveStream.src = URL.createObjectURL(blob);
+                    }})
+                    .catch(err => console.log('等待边缘端响应...'));
                 }}, 150); 
             </script>
         </body>
@@ -249,9 +255,7 @@ def run_detection_mode():
     with col_right:
         st.markdown("#### 📸 监控控制台")
 
-        # ==========================================================
-        # 🟢 纯浏览器前端下载按钮 (完美替代原 Python 按钮，彻底绕过报错)
-        # ==========================================================
+        # 🟢 前端下载按钮，图片和数量直接下载到本机
         download_buttons_html = f"""
         <!DOCTYPE html>
         <html>
@@ -314,12 +318,10 @@ def run_detection_mode():
         </html>
         """
         components.html(download_buttons_html, height=130)
-        # ==========================================================
 
         st.markdown("---")
         st.markdown("#### 📈 实时目标计数")
 
-        # 👇 这里及以下的折线图代码完全是你原本的，一字不差！
         chart_html = f"""
         <!DOCTYPE html>
         <html>
@@ -359,7 +361,7 @@ def run_detection_mode():
                 }});
 
                 setInterval(() => {{
-                    fetch('{count_url}')
+                    fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
                         .then(response => response.json())
                         .then(data => {{
                             var now = new Date();
@@ -438,66 +440,39 @@ def run_classification_mode():
 
 
 # ==========================================================
-# 模式三：历史数据洞察 (图表重绘与照片画廊)
+# 模式三：历史数据洞察 (去除了画廊，完美保留折线图分析)
 # ==========================================================
 def run_history_mode():
-    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测记录与截图归档</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title"><h1>历史数据管理</h1><p>查看历史自动检测趋势记录</p></div>', unsafe_allow_html=True)
 
-    # 将页面分为两个选项卡
-    tab_curve, tab_gallery = st.tabs(["📈 历史检测趋势分析", "🖼️ 本地历史截图展示"])
+    # 选项卡已删除，直接在当前页面展示历史折线图
+    log_file = os.path.join(save_dir, "auto_curve_history.json")
+    if os.path.exists(log_file):
+        records = []
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    records.append(json.loads(line))
 
-    # 选项卡 1：自动保存的曲线重绘
-    with tab_curve:
-        log_file = os.path.join(save_dir, "auto_curve_history.json")
-        if os.path.exists(log_file):
-            records = []
-            with open(log_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        records.append(json.loads(line))
+        if records:
+            st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
+            # 倒序排列，让最新的记录在最上面
+            options = [r["timestamp"] for r in reversed(records)]
+            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
 
-            if records:
-                st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
-                # 倒序排列，让最新的记录在最上面
-                options = [r["timestamp"] for r in reversed(records)]
-                selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
-
-                # 重绘图表
-                for r in records:
-                    if r["timestamp"] == selected_time:
-                        df = pd.DataFrame(r["data"])
-                        df.set_index("时间", inplace=True)
-                        st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
-                        # 极其美观的 Streamlit 原生折线图
-                        st.line_chart(df, height=350, use_container_width=True)
-                        break
-            else:
-                st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
+            # 重绘图表
+            for r in records:
+                if r["timestamp"] == selected_time:
+                    df = pd.DataFrame(r["data"])
+                    df.set_index("时间", inplace=True)
+                    st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
+                    # 极其美观的 Streamlit 原生折线图
+                    st.line_chart(df, height=350, use_container_width=True)
+                    break
         else:
-            st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
-
-    # 选项卡 2：相册画廊
-    with tab_gallery:
-        # 抓取目录下所有的 jpg 和 png 图片
-        images = glob.glob(os.path.join(save_dir, "*.jpg")) + glob.glob(os.path.join(save_dir, "*.png"))
-
-        if images:
-            # 按修改时间从新到旧排序
-            images.sort(key=os.path.getmtime, reverse=True)
-            st.markdown(f"📸 共检索到 **{len(images)}** 张本地截图文件。")
-
-            # 建立三列的自适应照片墙
-            cols = st.columns(3)
-            for idx, img_path in enumerate(images):
-                with cols[idx % 3]:
-                    # 【核心修复】：用 PIL 强行把图片读到内存里，破解浏览器的本地路径拦截
-                    try:
-                        img_data = Image.open(img_path)
-                        st.image(img_data, caption=os.path.basename(img_path))
-                    except Exception as e:
-                        st.error(f"图片加载失败: {e}")
-        else:
-            st.info(f"🚫 目录 {save_dir} 中暂无保存的图像文件，您可以在检测页面点击【一键保存当前画面】。")
+            st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
+    else:
+        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
 
 
 # ---------------------------
@@ -511,5 +486,3 @@ elif main_task == "害虫精确分类":
     run_classification_mode()
 elif main_task == "历史数据管理":
     run_history_mode()
-
-
