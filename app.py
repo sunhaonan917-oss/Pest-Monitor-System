@@ -6,8 +6,7 @@ import json
 import threading
 import requests
 import pandas as pd
-import altair as alt  # ✅ 新增：引入 Altair 用于精确控制图表坐标轴
-# ✅ 引入 timezone 用于计算和强制绑定北京时间
+import altair as alt  
 from datetime import datetime, timedelta, timezone
 
 # ✅ 强制修改 Streamlit Cloud 服务器底层的时区为北京时间 (UTC+8)
@@ -51,11 +50,9 @@ NGROK_HEADERS = {
 JETSON_IP = "100.104.20.74"
 JETSON_PORT = "5000"
 
-# 自动在当前目录下建立文件夹，彻底解决 C盘 权限报错
 SAFE_SAVE_DIR = os.path.join(APP_ROOT, "pest_records")
 os.makedirs(SAFE_SAVE_DIR, exist_ok=True)
 
-# 【关键点】作为前端网页和后台线程通信的桥梁
 global_config = {"save_dir": SAFE_SAVE_DIR}
 
 # ---------------------------
@@ -98,40 +95,43 @@ if 'save_dir' not in st.session_state:
 
 
 # ==========================================================
-# 后台隐形守护线程：每分钟自动保存过去20秒的曲线
+# 后台隐形守护线程：每 5 秒采点，每 2 分钟归档保存
 # ==========================================================
 def auto_curve_logger():
     count_url = f"{NGROK_URL}/get_count"
-    buffer_20s = []
+    buffer_2min = []
     last_save_minute = -1
 
-    # ✅ 构造北京时区对象 (UTC+8)
     BJ_TZ = timezone(timedelta(hours=8))
 
     while True:
         current_save_dir = global_config["save_dir"]
 
         try:
-            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=5)
-            
-            # ✅ 【修复时区问题】：强制使用设定好的北京时区获取当前时间
+            # 超时时间设为3秒，如果边缘设备离线/断开，会触发异常并跳过，实现“只在有视频画面传过来时记录”
+            res = requests.get(count_url, headers=NGROK_HEADERS, timeout=3)
             current_time = datetime.now(BJ_TZ)
 
+            # 状态码 200 说明成功接通了边缘端流媒体后台
             if res.status_code == 200:
                 count = res.json().get("count", 0)
                 now_str = current_time.strftime("%H:%M:%S")
-                buffer_20s.append({"时间": now_str, "检出数量": count})
+                
+                # 记录数据点
+                buffer_2min.append({"时间": now_str, "检出数量": count})
 
-                if len(buffer_20s) > 20:
-                    buffer_20s.pop(0)
+                # 每 5 秒采一个点，2 分钟最多积攒 24 个点
+                if len(buffer_2min) > 24:
+                    buffer_2min.pop(0)
 
-                if current_time.second <= 3 and current_time.minute != last_save_minute and len(buffer_20s) >= 10:
+                # 触发保存条件：偶数分钟 (如 12:02, 12:04)、前 6 秒内 (抓住采样缝隙)、这分钟还没存过、至少攒够了半分钟的数据
+                if current_time.minute % 2 == 0 and current_time.second <= 6 and current_time.minute != last_save_minute and len(buffer_2min) >= 6:
                     os.makedirs(current_save_dir, exist_ok=True)
                     log_file = os.path.join(current_save_dir, "auto_curve_history.json")
 
                     record = {
                         "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "data": buffer_20s.copy()
+                        "data": buffer_2min.copy()
                     }
                     with open(log_file, "a", encoding="utf-8") as f:
                         f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -139,9 +139,11 @@ def auto_curve_logger():
                     last_save_minute = current_time.minute  
 
         except Exception as e:
+            # 捕获异常：视频流断开时不进行采样，不触发保存
             pass  
 
-        time.sleep(1)  
+        # ✅ 改为每 5 秒采集一次数据
+        time.sleep(5)  
 
 
 if 'logger_thread_started' not in st.session_state:
@@ -388,6 +390,7 @@ def run_detection_mode():
                     }}
                 }});
 
+                // 前端实时图表仍然保持 1 秒高频刷新，保证页面动画流畅
                 setInterval(() => {{
                     fetch('{count_url}', {{ headers: {{ "ngrok-skip-browser-warning": "any" }} }})
                         .then(response => response.json())
@@ -484,25 +487,28 @@ def run_history_mode():
         if records:
             st.success(f"✅ 在本地库中找到 **{len(records)}** 组由后台自动保存的历史曲线记录。")
             options = [r["timestamp"] for r in reversed(records)]
-            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (系统每逢整分自动记录):", options)
+            
+            # ✅ 修改了下拉框提示文案
+            selected_time = st.selectbox("⏳ 请选择要回溯的历史时间节点 (有连接流时，系统逢偶数分钟自动记录):", options)
 
             for r in records:
                 if r["timestamp"] == selected_time:
                     df = pd.DataFrame(r["data"])
-                    st.markdown(f"#### 📊 {selected_time} 前 20 秒目标数量走势")
                     
-                    # ✅ 【核心修复】：使用 Altair 强制指定 X 轴为离散字符串 (Nominal)，彻底干掉 Streamlit 的自动时区转换
+                    # ✅ 修改了标题文案
+                    st.markdown(f"#### 📊 {selected_time} 前 2 分钟目标数量走势")
+                    
                     chart = alt.Chart(df).mark_line(point=True).encode(
-                        x=alt.X('时间:N', sort=None, title='记录时间 (北京时间)'),
+                        x=alt.X('时间:N', sort=None, title='记录时间 (每5秒采点)'),
                         y=alt.Y('检出数量:Q', title='检出数量')
                     ).properties(height=350)
                     
                     st.altair_chart(chart, use_container_width=True)
                     break
         else:
-            st.info("🕒 数据记录文件为空。系统启动后，每逢整分（如 12:01:00）会自动保存一次数据，请稍后查看。")
+            st.info("🕒 数据记录文件为空。系统启动后，当有检测画面时，每 2 分钟会自动保存一次数据，请稍后查看。")
     else:
-        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在整分时存入 {save_dir}/auto_curve_history.json 中。")
+        st.info(f"📂 暂无历史曲线。系统将在后台静默收集数据，并在偶数分钟存入 {save_dir}/auto_curve_history.json 中。")
 
 
 # ---------------------------
